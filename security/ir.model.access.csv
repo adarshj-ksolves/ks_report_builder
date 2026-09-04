@@ -1,0 +1,4 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_ks_report_builder_designer,ks.report.builder designer,model_ks_report_builder,ks_report_builder.group_ks_report_builder,1,1,1,1
+access_ks_report_builder_field_designer,ks.report.builder.field designer,model_ks_report_builder_field,ks_report_builder.group_ks_report_builder,1,1,1,1
+access_ks_report_snapshot_designer,ks.report.snapshot designer,model_ks_report_snapshot,ks_report_builder.group_ks_report_builder,1,1,1,1

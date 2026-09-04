@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_ks_report_builder_tree" model="ir.ui.view">
+        <field name="name">ks.report.builder.list</field>
+        <field name="model">ks.report.builder</field>
+        <field name="arch" type="xml">
+            <list string="Reports">
+                <field name="name"/>
+                <field name="model_id"/>
+                <field name="model_name"/>
+                <field name="state" widget="badge"
+                    decoration-success="state == 'deployed'"
+                    decoration-muted="state == 'draft'"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_ks_report_builder_form" model="ir.ui.view">
+        <field name="name">ks.report.builder.form</field>
+        <field name="model">ks.report.builder</field>
+        <field name="arch" type="xml">
+            <form string="Report">
+                <header>
+                    <button name="action_deploy" string="Deploy" type="object"
+                        class="btn-primary" invisible="state == 'deployed'"/>
+                    <button name="action_open_report" string="Open Report" type="object"
+                        class="btn-primary" invisible="state != 'deployed'"/>
+                    <button name="action_undeploy" string="Undeploy" type="object"
+                        invisible="state != 'deployed'"
+                        confirm="This removes the generated model, views and menu. The definition is kept."/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,deployed"/>
+                </header>
+                <sheet>
+                    <div class="oe_title">
+                        <label for="name"/>
+                        <h1><field name="name" placeholder="e.g. Product-wise Discount"/></h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="model_id" options="{'no_create': True}"/>
+                            <field name="base_model_name" invisible="1"/>
+                            <field name="domain" widget="domain"
+                                options="{'model': 'base_model_name', 'in_dialog': True}"/>
+                        </group>
+                        <group>
+                            <field name="group_ids" widget="many2many_tags"/>
+                            <field name="create_menu"/>
+                            <field name="menu_parent_id" invisible="not create_menu"
+                                options="{'no_create': True}"/>
+                            <field name="skip_company_check"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Columns" name="columns">
+                            <field name="field_ids">
+                                <list editable="bottom">
+                                    <field name="sequence" widget="handle"/>
+                                    <field name="base_model_id" column_invisible="True"/>
+                                    <field name="level2_model_id" column_invisible="True"/>
+                                    <field name="level3_model_id" column_invisible="True"/>
+                                    <field name="kind"/>
+                                    <field name="field_id"
+                                        readonly="kind != 'path'"
+                                        options="{'no_create': True}"/>
+                                    <field name="sub_field_id"
+                                        readonly="kind != 'path' or not level2_model_id"
+                                        options="{'no_create': True}"/>
+                                    <field name="sub_sub_field_id"
+                                        readonly="kind != 'path' or not level3_model_id"
+                                        options="{'no_create': True}"/>
+                                    <field name="expression" readonly="kind != 'expression'"/>
+                                    <field name="label"/>
+                                    <field name="ttype" optional="hide"/>
+                                    <field name="path" optional="hide"/>
+                                    <field name="column_name" optional="hide"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Technical" name="technical" groups="base.group_no_one">
+                            <group>
+                                <field name="model_name"/>
+                                <field name="generated_model_id"/>
+                                <field name="action_id"/>
+                                <field name="menu_id"/>
+                            </group>
+                            <field name="query" widget="text"/>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_ks_report_builder" model="ir.actions.act_window">
+        <field name="name">Reports</field>
+        <field name="res_model">ks.report.builder</field>
+        <field name="view_mode">list,form</field>
+    </record>
+</odoo>

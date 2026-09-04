@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <menuitem id="menu_ks_report_builder_root"
+        name="Report Builder"
+        sequence="95"
+        web_icon="ks_report_builder,static/description/icon.png"/>
+
+    <menuitem id="menu_ks_report_builder_generated"
+        name="Reports"
+        parent="menu_ks_report_builder_root"
+        sequence="10"/>
+
+    <menuitem id="menu_ks_report_builder_config"
+        name="Configuration"
+        parent="menu_ks_report_builder_root"
+        sequence="90"
+        groups="ks_report_builder.group_ks_report_builder"/>
+
+    <menuitem id="menu_ks_report_builder_definitions"
+        name="Report Definitions"
+        parent="menu_ks_report_builder_config"
+        action="action_ks_report_builder"
+        sequence="10"/>
+</odoo>

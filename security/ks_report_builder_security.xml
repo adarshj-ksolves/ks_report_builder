@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="group_ks_report_builder" model="res.groups">
+        <field name="name">Report Builder: Designer</field>
+        <field name="comment">Can define and deploy generated reports. This grants
+            the ability to create Odoo models and read data across any base model,
+            so treat it as a technical privilege.</field>
+    </record>
+</odoo>

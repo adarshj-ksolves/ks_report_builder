@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_ks_report_snapshot_tree" model="ir.ui.view">
+        <field name="name">ks.report.snapshot.list</field>
+        <field name="model">ks.report.snapshot</field>
+        <field name="arch" type="xml">
+            <list string="Snapshot Fields">
+                <field name="name"/>
+                <field name="base_model_id"/>
+                <field name="path"/>
+                <field name="field_name"/>
+                <field name="backfilled"/>
+                <field name="state" widget="badge"
+                    decoration-success="state == 'active'"
+                    decoration-muted="state == 'draft'"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_ks_report_snapshot_form" model="ir.ui.view">
+        <field name="name">ks.report.snapshot.form</field>
+        <field name="model">ks.report.snapshot</field>
+        <field name="arch" type="xml">
+            <form string="Snapshot Field">
+                <header>
+                    <button name="action_activate" string="Activate" type="object"
+                        class="btn-primary" invisible="state == 'active'"/>
+                    <button name="action_backfill" string="Backfill Existing Records"
+                        type="object" invisible="state != 'active'"
+                        confirm="Existing records will be filled with the source value as it is TODAY, not as it was when they were created. Only records created from now on carry a true snapshot. Continue?"/>
+                    <button name="action_deactivate" string="Deactivate" type="object"
+                        invisible="state != 'active'"
+                        confirm="This deletes the column and every value stored in it. Continue?"/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,active"/>
+                </header>
+                <sheet>
+                    <div class="alert alert-info" role="status">
+                        A snapshot field freezes a value at the moment a record is
+                        created, so later changes to the source do not rewrite
+                        history. Use it for things like the list price on an
+                        invoice line.
+                    </div>
+                    <div class="oe_title">
+                        <label for="name"/>
+                        <h1><field name="name" placeholder="e.g. List Price at Invoicing"/></h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="base_model_id" readonly="state == 'active'"
+                                options="{'no_create': True}"/>
+                            <field name="level2_model_id" invisible="1"/>
+                            <field name="level3_model_id" invisible="1"/>
+                        </group>
+                        <group>
+                            <field name="field_name"/>
+                            <field name="backfilled"/>
+                        </group>
+                    </group>
+                    <group string="Value To Capture">
+                        <field name="field_id" readonly="state == 'active'"
+                            options="{'no_create': True}"/>
+                        <field name="sub_field_id" readonly="state == 'active' or not level2_model_id"
+                            options="{'no_create': True}"/>
+                        <field name="sub_sub_field_id" readonly="state == 'active' or not level3_model_id"
+                            options="{'no_create': True}"/>
+                        <field name="path"/>
+                        <field name="ttype"/>
+                    </group>
+                    <group string="Generated Code" groups="base.group_no_one"
+                        invisible="state != 'active'">
+                        <field name="compute_code" nolabel="1"/>
+                        <field name="generated_field_id"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_ks_report_snapshot" model="ir.actions.act_window">
+        <field name="name">Snapshot Fields</field>
+        <field name="res_model">ks.report.snapshot</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+    <menuitem id="menu_ks_report_snapshot"
+        name="Snapshot Fields"
+        parent="menu_ks_report_builder_config"
+        action="action_ks_report_snapshot"
+        sequence="20"/>
+</odoo>
