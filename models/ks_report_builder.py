@@ -5,6 +5,7 @@ from odoo import api, fields, models, Command, _
 from odoo.exceptions import UserError, ValidationError
 
 from .ir_model import KS_MODEL_PREFIX
+from .ks_report_builder_field import KS_AGGREGATOR_SQL
 
 _logger = logging.getLogger(__name__)
 
@@ -179,6 +180,38 @@ class KsReportBuilder(models.Model):
         raise UserError(_("Could not resolve path %s.", path))
 
     # ------------------------------------------------------------------
+    # Aggregate lookup (scalar correlated subquery over an unrelated table)
+    # ------------------------------------------------------------------
+
+    def _ks_build_aggregate_subquery(self, line, joins):
+        """Return SQL for a scalar SUM/COUNT/AVG/MAX/MIN over ``agg_model_id``,
+        correlated back to this row on a shared many2one dimension.
+
+        This is a correlated subquery, not a join: it collapses the child
+        table down to one number entirely inside its own parentheses, so the
+        outer query stays exactly one row per base record - no GROUP BY
+        anywhere, same as every other column (Invariant #1). The correlation
+        key on the base side is resolved through the normal path machinery
+        (_ks_resolve_path), so multi-hop correlation (e.g. move_id.partner_id)
+        reuses the same joins as any other column.
+        """
+        self.ensure_one()
+        base_alias, base_column = self._ks_resolve_path(line.agg_base_path, joins)
+        target_model = self._ks_check_table_backed(line.agg_model_id.model)
+        sql_func = KS_AGGREGATOR_SQL[line.agg_function]
+        return (
+            '(SELECT %(func)s(t."%(measure)s") FROM "%(table)s" t'
+            ' WHERE t."%(link)s" = %(base_alias)s."%(base_column)s")' % {
+                'func': sql_func,
+                'measure': line.agg_measure_field_id.name,
+                'table': target_model._table,
+                'link': line.agg_link_field_id.name,
+                'base_alias': base_alias,
+                'base_column': base_column,
+            }
+        )
+
+    # ------------------------------------------------------------------
     # Expression compiler
     # ------------------------------------------------------------------
 
@@ -250,10 +283,19 @@ class KsReportBuilder(models.Model):
         path_selections = []
         numeric_columns = []
 
-        path_lines = self.field_ids.filtered(lambda line: line.kind == 'path')
-        for line in path_lines:
-            alias, column = self._ks_resolve_path(line.path, joins)
-            path_selections.append('%s."%s" AS "%s"' % (alias, column, line.column_name))
+        # Aggregate columns are resolved alongside path columns, not in the
+        # outer expression layer below: a correlated subquery references
+        # base/join aliases directly, the same as a plain path column, and
+        # never needs to reference a sibling column's own alias the way an
+        # arithmetic expression does.
+        inner_lines = self.field_ids.filtered(lambda line: line.kind in ('path', 'aggregate'))
+        for line in inner_lines:
+            if line.kind == 'path':
+                alias, column = self._ks_resolve_path(line.path, joins)
+                path_selections.append('%s."%s" AS "%s"' % (alias, column, line.column_name))
+            else:
+                selection_sql = self._ks_build_aggregate_subquery(line, joins)
+                path_selections.append('%s AS "%s"' % (selection_sql, line.column_name))
             if line.ttype in KS_NUMERIC_TYPES:
                 numeric_columns.append(line.column_name)
 
@@ -277,7 +319,7 @@ class KsReportBuilder(models.Model):
 
         outer_selections = ['ks_base.id AS id'] + [
             'ks_base."%s" AS "%s"' % (line.column_name, line.column_name)
-            for line in path_lines
+            for line in inner_lines
         ]
         for line in expression_lines:
             compiled = self._ks_compile_expression(line.expression, numeric_columns)

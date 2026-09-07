@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+    <t t-name="ks_report_builder.KsExpressionField">
+        <t t-if="props.readonly">
+            <span t-esc="formattedValue"/>
+        </t>
+        <t t-else="">
+            <div class="d-flex align-items-center gap-1">
+                <input
+                    class="o_input"
+                    t-att-id="props.id"
+                    t-att-placeholder="props.placeholder"
+                    t-on-blur="onBlur"
+                    t-ref="input"
+                />
+                <Dropdown menuClass="'ks_expression_field_menu'">
+                    <button class="btn btn-sm p-0 px-1 fa fa-plus-square" title="Insert Field"/>
+                    <t t-set-slot="content">
+                        <t t-if="!availableColumns.length">
+                            <DropdownItem closingMode="'none'">
+                                <em>Add a numeric column first</em>
+                            </DropdownItem>
+                        </t>
+                        <t t-foreach="availableColumns" t-as="col" t-key="col.alias">
+                            <DropdownItem onSelected="() => this.onInsertColumn(col.alias)">
+                                <span t-esc="col.label"/>
+                                <small class="text-muted ms-1" t-esc="'(' + col.alias + ')'"/>
+                            </DropdownItem>
+                        </t>
+                    </t>
+                </Dropdown>
+            </div>
+        </t>
+    </t>
+
+</templates>

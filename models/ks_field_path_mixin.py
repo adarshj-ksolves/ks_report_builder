@@ -9,7 +9,12 @@ KS_SCALAR_TYPES = (
     'boolean', 'date', 'datetime', 'many2one',
 )
 # Only many2one may be traversed: crossing a one2many/many2many fans out rows
-# and every measure would silently double count.
+# and every measure would silently double count. Restricting the picker's own
+# JS filter to KS_SCALAR_TYPES (ks_field_chain_field.js) is what actually
+# enforces this - a one2many/many2many never even appears as a selectable row,
+# so it can never be chosen as a mid-path hop either. This constant is kept
+# here too so server-side validation (_ks_walk_path) matches the client
+# exactly, in case a path is set via RPC rather than through the widget.
 KS_TRAVERSABLE_TYPES = ('many2one',)
 
 # monetary needs a currency_field companion and selection needs
@@ -17,21 +22,57 @@ KS_TRAVERSABLE_TYPES = ('many2one',)
 # supply reliably, so both degrade to a simpler type.
 KS_TTYPE_OVERRIDE = {'monetary': 'float', 'selection': 'char'}
 
-KS_SCALAR_DOMAIN = (
-    "[('model_id', '=', %(model)s), ('ttype', 'in', %(types)s),"
-    " '|', ('store', '=', True), ('related', '!=', False)]"
-)
-
 
 def ks_slugify(value):
     return re.sub(r'[^a-z0-9]+', '_', (value or '').lower()).strip('_')
 
 
-class KsFieldPathMixin(models.AbstractModel):
-    """Three chained dropdowns that resolve to a dotted field path.
+def ks_walk_path(env, model_name, path):
+    """Walk a dotted field path against ``model_name``, returning the final
+    Field. Shared by the mixin's own ``path`` (relative to ``base_model_id``)
+    and by KsReportBuilderField's aggregate-column correlation key (relative
+    to the same base model, but stored on a separate field) - anywhere a
+    dotted path needs the exact same many2one-only, scalar-terminal
+    validation.
 
-    Nothing is typed: each level lists the stored fields of the model reached by
-    the previous level. Concrete models supply ``base_model_id``.
+    Raises ValidationError on an unknown segment, on drilling through
+    anything other than a many2one, or if the final field's type isn't one
+    this module knows how to turn into a column.
+    """
+    if not path:
+        raise ValidationError(_("Pick the source field."))
+    segments = path.split('.')
+    field = None
+    for index, segment in enumerate(segments):
+        model = env.get(model_name)
+        if model is None:
+            raise ValidationError(_("Model %s does not exist.", model_name))
+        field = model._fields.get(segment)
+        if field is None:
+            raise ValidationError(_(
+                "Field %(f)s does not exist on %(m)s.", f=segment, m=model_name))
+        if index == len(segments) - 1:
+            break
+        if field.type not in KS_TRAVERSABLE_TYPES:
+            raise ValidationError(_(
+                "%(f)s is a %(t)s and cannot be drilled into. Only "
+                "many2one relations can be followed, otherwise totals "
+                "would be counted more than once.",
+                f=segment, t=field.type))
+        model_name = field.comodel_name
+    if field.type not in KS_SCALAR_TYPES:
+        raise ValidationError(_(
+            "%(f)s is a %(t)s and cannot be used as a column.",
+            f=segments[-1], t=field.type))
+    return field
+
+
+class KsFieldPathMixin(models.AbstractModel):
+    """A dotted field path, typed directly by an arbitrary-depth field-chain
+    picker widget (``ks_field_chain_picker``, wrapping Odoo's own
+    ``ModelFieldSelector``) rather than a fixed number of chained dropdowns.
+
+    Concrete models supply ``base_model_id``.
     """
     _name = 'ks.field.path.mixin'
     _description = 'Field Path Picker'
@@ -41,90 +82,51 @@ class KsFieldPathMixin(models.AbstractModel):
         string='Source Model',
         ondelete='cascade',
     )
-    field_id = fields.Many2one(
-        comodel_name='ir.model.fields',
-        string='Field',
-        ondelete='cascade',
-        domain=KS_SCALAR_DOMAIN % {'model': 'base_model_id', 'types': list(KS_SCALAR_TYPES)},
+    base_model_technical_name = fields.Char(
+        related='base_model_id.model',
+        string='Source Model Technical Name',
+        help="Used to point the field-chain picker widget at the source "
+             "model - it needs the technical name as a string, not the "
+             "base_model_id many2one value.",
     )
-    level2_model_id = fields.Many2one(
-        comodel_name='ir.model',
-        string='Level 2 Model',
-        compute='_compute_level_models',
-    )
-    sub_field_id = fields.Many2one(
-        comodel_name='ir.model.fields',
-        string='Then',
-        ondelete='cascade',
-        domain=KS_SCALAR_DOMAIN % {'model': 'level2_model_id', 'types': list(KS_SCALAR_TYPES)},
-    )
-    level3_model_id = fields.Many2one(
-        comodel_name='ir.model',
-        string='Level 3 Model',
-        compute='_compute_level_models',
-    )
-    sub_sub_field_id = fields.Many2one(
-        comodel_name='ir.model.fields',
-        string='Then Again',
-        ondelete='cascade',
-        domain=KS_SCALAR_DOMAIN % {'model': 'level3_model_id', 'types': list(KS_SCALAR_TYPES)},
-    )
-    path = fields.Char(string='Field Path', compute='_compute_path', store=True)
-    ttype = fields.Char(string='Type', compute='_compute_path', store=True)
-    relation = fields.Char(string='Relation', compute='_compute_path', store=True)
+    path = fields.Char(string='Field Path')
+    ttype = fields.Char(string='Type', compute='_compute_ttype_relation', store=True)
+    relation = fields.Char(string='Relation', compute='_compute_ttype_relation', store=True)
 
     def _ks_path_active(self):
         """Concrete models may disable path resolution for some records."""
         self.ensure_one()
         return True
 
-    @api.depends('field_id', 'sub_field_id')
-    def _compute_level_models(self):
-        ir_model = self.env['ir.model']
-        for line in self:
-            level2 = level3 = ir_model
-            if line.field_id.ttype in KS_TRAVERSABLE_TYPES and line.field_id.relation:
-                level2 = ir_model.sudo()._get(line.field_id.relation)
-            if line.sub_field_id.ttype in KS_TRAVERSABLE_TYPES and line.sub_field_id.relation:
-                level3 = ir_model.sudo()._get(line.sub_field_id.relation)
-            line.level2_model_id = level2
-            line.level3_model_id = level3
+    def _ks_walk_path(self):
+        """Walk ``path`` against ``base_model_id``, returning the final Field."""
+        self.ensure_one()
+        if not self.base_model_id:
+            raise ValidationError(_("Pick the source model first."))
+        return ks_walk_path(self.env, self.base_model_id.model, self.path)
 
-    @api.depends('field_id', 'sub_field_id', 'sub_sub_field_id')
-    def _compute_path(self):
+    @api.depends('path', 'base_model_id')
+    def _compute_ttype_relation(self):
         for line in self:
-            if not line._ks_path_active():
-                line.path = False
+            if not line._ks_path_active() or not line.path or not line.base_model_id:
                 line.ttype = 'float'
                 line.relation = False
                 continue
-            segments = []
-            final = self.env['ir.model.fields']
-            for candidate in (line.field_id, line.sub_field_id, line.sub_sub_field_id):
-                if not candidate:
-                    break
-                segments.append(candidate.name)
-                final = candidate
-            line.path = '.'.join(segments) or False
-            raw_type = final.ttype or False
+            try:
+                field = line._ks_walk_path()
+            except ValidationError:
+                # Leave a transiently invalid path (e.g. mid-edit via RPC)
+                # with a harmless default; _check_path enforces validity for
+                # real at save time.
+                line.ttype = 'float'
+                line.relation = False
+                continue
+            raw_type = field.type
             line.ttype = KS_TTYPE_OVERRIDE.get(raw_type, raw_type)
-            line.relation = final.relation if raw_type == 'many2one' else False
+            line.relation = field.comodel_name if raw_type == 'many2one' else False
 
-    @api.constrains('field_id', 'sub_field_id', 'sub_sub_field_id')
-    def _check_traversal(self):
+    @api.constrains('path', 'base_model_id')
+    def _check_path(self):
         for line in self:
-            for parent, child in ((line.field_id, line.sub_field_id),
-                                  (line.sub_field_id, line.sub_sub_field_id)):
-                if child and parent.ttype not in KS_TRAVERSABLE_TYPES:
-                    raise ValidationError(_(
-                        "%(f)s is a %(t)s and cannot be drilled into. Only "
-                        "many2one relations can be followed, otherwise totals "
-                        "would be counted more than once.",
-                        f=parent.name, t=parent.ttype))
-
-    @api.onchange('field_id', 'sub_field_id', 'sub_sub_field_id')
-    def _onchange_field_path(self):
-        if not self.field_id or self.field_id.ttype not in KS_TRAVERSABLE_TYPES:
-            self.sub_field_id = False
-        if not self.sub_field_id or self.sub_field_id.ttype not in KS_TRAVERSABLE_TYPES:
-            self.sub_sub_field_id = False
+            if line._ks_path_active() and line.path and line.base_model_id:
+                line._ks_walk_path()

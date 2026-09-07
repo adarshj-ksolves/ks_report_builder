@@ -48,8 +48,7 @@
                         <group>
                             <field name="base_model_id" readonly="state == 'active'"
                                 options="{'no_create': True}"/>
-                            <field name="level2_model_id" invisible="1"/>
-                            <field name="level3_model_id" invisible="1"/>
+                            <field name="base_model_technical_name" invisible="1"/>
                         </group>
                         <group>
                             <field name="field_name"/>
@@ -57,13 +56,9 @@
                         </group>
                     </group>
                     <group string="Value To Capture">
-                        <field name="field_id" readonly="state == 'active'"
-                            options="{'no_create': True}"/>
-                        <field name="sub_field_id" readonly="state == 'active' or not level2_model_id"
-                            options="{'no_create': True}"/>
-                        <field name="sub_sub_field_id" readonly="state == 'active' or not level3_model_id"
-                            options="{'no_create': True}"/>
-                        <field name="path"/>
+                        <field name="path" widget="ks_field_chain_picker"
+                            options="{'model': 'base_model_technical_name'}"
+                            readonly="state == 'active'"/>
                         <field name="ttype"/>
                     </group>
                     <group string="Generated Code" groups="base.group_no_one"

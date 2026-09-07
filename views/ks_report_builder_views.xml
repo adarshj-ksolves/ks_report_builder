@@ -56,22 +56,30 @@
                                 <list editable="bottom">
                                     <field name="sequence" widget="handle"/>
                                     <field name="base_model_id" column_invisible="True"/>
-                                    <field name="level2_model_id" column_invisible="True"/>
-                                    <field name="level3_model_id" column_invisible="True"/>
+                                    <field name="base_model_technical_name" column_invisible="True"/>
                                     <field name="kind"/>
-                                    <field name="field_id"
-                                        readonly="kind != 'path'"
+                                    <field name="path" widget="ks_field_chain_picker"
+                                        options="{'model': 'base_model_technical_name'}"
+                                        readonly="kind != 'path'"/>
+                                    <field name="expression" widget="ks_expression_picker"
+                                        readonly="kind != 'expression'"/>
+                                    <field name="agg_base_path" string="Correlate On"
+                                        widget="ks_field_chain_picker"
+                                        options="{'model': 'base_model_technical_name'}"
+                                        readonly="kind != 'aggregate'"/>
+                                    <field name="agg_model_id" string="From Model"
+                                        readonly="kind != 'aggregate'"
                                         options="{'no_create': True}"/>
-                                    <field name="sub_field_id"
-                                        readonly="kind != 'path' or not level2_model_id"
+                                    <field name="agg_link_field_id" string="Link Field"
+                                        readonly="kind != 'aggregate'"
                                         options="{'no_create': True}"/>
-                                    <field name="sub_sub_field_id"
-                                        readonly="kind != 'path' or not level3_model_id"
+                                    <field name="agg_measure_field_id" string="Aggregate Field"
+                                        readonly="kind != 'aggregate'"
                                         options="{'no_create': True}"/>
-                                    <field name="expression" readonly="kind != 'expression'"/>
+                                    <field name="agg_function"
+                                        readonly="kind != 'aggregate'"/>
                                     <field name="label"/>
                                     <field name="ttype" optional="hide"/>
-                                    <field name="path" optional="hide"/>
                                     <field name="column_name" optional="hide"/>
                                 </list>
                             </field>
