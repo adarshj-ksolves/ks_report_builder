@@ -18,6 +18,31 @@ def ks_is_snapshot_field(field_name):
     return bool(field_name) and field_name.startswith(KS_SNAPSHOT_PREFIX)
 
 
+def ks_read_report_column_kind(cr, model_name, column_name):
+    """Fetch the ``kind`` (path/expression/aggregate) of one generated report
+    column, given a bare cursor. Raw SQL, same registry-setup-safety reason as
+    IrModel._ks_read_report_query: going through the ORM for
+    ks.report.builder.field is not safe this early, and a plain function
+    taking ``cr`` avoids needing a working ``ir.model`` recordset from within
+    IrModelFields._instanciate_attrs.
+    """
+    cr.execute("""
+        SELECT to_regclass('ks_report_builder_field') IS NOT NULL
+    """)
+    if not cr.fetchone()[0]:
+        return None
+    cr.execute("""
+        SELECT f.kind
+          FROM ks_report_builder_field f
+          JOIN ks_report_builder r ON r.id = f.report_id
+         WHERE r.model_name = %s
+           AND f.column_name = %s
+         LIMIT 1
+    """, (model_name, column_name))
+    row = cr.fetchone()
+    return row[0] if row else None
+
+
 class IrModel(models.Model):
     _inherit = 'ir.model'
 
@@ -82,7 +107,40 @@ class IrModelFields(models.Model):
             # column, so it is injected here rather than stored.
             attrs['readonly'] = True
             if field_data.get('ttype') in KS_NUMERIC_TYPES:
-                attrs.setdefault('aggregator', 'sum')
+                # An 'aggregate' column is a scalar correlated lookup: the
+                # SAME value repeats on every base row that shares its
+                # correlation key (e.g. every sale order line for the same
+                # product shows that product's identical total-purchased
+                # figure - see kind='aggregate' in ks_report_builder.py).
+                # 'sum' is always wrong for these once the key repeats (it
+                # multiplies the true figure by however many rows share it -
+                # not a rounding quirk, a real N-times-counted total). 'avg'
+                # is the one built-in aggregator that is actually CORRECT
+                # here: averaging N identical copies of the same value
+                # returns that value unchanged - and grouping by the exact
+                # correlation dimension (e.g. Product, when the column is
+                # correlated on Product) is the normal way these columns get
+                # used in a pivot, since that dimension is what the lookup is
+                # keyed on in the first place. It is only misleading if the
+                # pivot/list is grouped by something OTHER than that
+                # dimension (or left fully ungrouped across many different
+                # keys) - there is no built-in aggregator that is correct in
+                # that case, so this is the least-wrong default that still
+                # keeps the column usable as a pivot Measure.
+                # 'path'/'expression' columns are true per-row measures and
+                # keep summing normally.
+                kind = None
+                try:
+                    kind = ks_read_report_column_kind(
+                        self.env.cr, field_data.get('model'), field_data.get('name'))
+                except Exception:  # noqa: BLE001 - registry setup must never hard-fail
+                    _logger.exception(
+                        "KS Report Builder: cannot read column kind for %s.%s",
+                        field_data.get('model'), field_data.get('name'))
+                if kind == 'aggregate':
+                    attrs['aggregator'] = 'avg'
+                else:
+                    attrs.setdefault('aggregator', 'sum')
         elif ks_is_snapshot_field(field_data.get('name')):
             # A snapshot must capture the value from THIS record's own
             # create() vals, not from a later recompute - and a field with an

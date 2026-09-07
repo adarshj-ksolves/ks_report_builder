@@ -129,6 +129,15 @@ class KsReportBuilder(models.Model):
         if field is None:
             raise UserError(_("Field %(f)s does not exist on %(m)s.",
                               f=field_name, m=model_name))
+        if getattr(field, 'translate', False):
+            # translate=True fields store a per-language jsonb blob, not a
+            # plain scalar column - see the matching guard and rationale in
+            # ks_field_path_mixin.ks_walk_path. Checked here too because
+            # aggregate columns (agg_link_field_id/agg_measure_field_id)
+            # reach the SQL builder without ever going through ks_walk_path.
+            raise UserError(_(
+                "Field %(f)s on %(m)s is a translated field and cannot be "
+                "used as a column.", f=field_name, m=model_name))
         if not getattr(field, 'inherited', False):
             if not field.store:
                 raise UserError(_(
@@ -194,22 +203,43 @@ class KsReportBuilder(models.Model):
         key on the base side is resolved through the normal path machinery
         (_ks_resolve_path), so multi-hop correlation (e.g. move_id.partner_id)
         reuses the same joins as any other column.
+
+        ``agg_domain``, if set, is written against agg_model_id's own field
+        names and restricts which rows of the child table are aggregated -
+        e.g. "only internal locations" for a stock.quant lookup (see the
+        known limitation in CLAUDE.md §8, now closed by this). A domain leaf
+        that drills through a relation (e.g. order_id.state) needs its own
+        JOIN inside the subquery - Odoo's domain compiler registers that join
+        on the ``Query`` object it's given (an aliased "t__order_id" table),
+        so the whole subquery MUST be built through that same ``Query``
+        (its ``subselect()``), not hand-written as a bare "FROM table t" -
+        otherwise the compiled WHERE references an alias with no
+        corresponding FROM-clause entry and Postgres rejects the query.
         """
         self.ensure_one()
+        from odoo.orm.domains import Domain
+        from odoo.tools.query import Query
+        from odoo.tools.sql import SQL
+
         base_alias, base_column = self._ks_resolve_path(line.agg_base_path, joins)
         target_model = self._ks_check_table_backed(line.agg_model_id.model)
         sql_func = KS_AGGREGATOR_SQL[line.agg_function]
-        return (
-            '(SELECT %(func)s(t."%(measure)s") FROM "%(table)s" t'
-            ' WHERE t."%(link)s" = %(base_alias)s."%(base_column)s")' % {
-                'func': sql_func,
-                'measure': line.agg_measure_field_id.name,
-                'table': target_model._table,
-                'link': line.agg_link_field_id.name,
-                'base_alias': base_alias,
-                'base_column': base_column,
-            }
-        )
+
+        query = Query(self.env, 't', SQL.identifier(target_model._table))
+        query.add_where(SQL(
+            "%s = %s",
+            SQL.identifier('t', line.agg_link_field_id.name),
+            SQL.identifier(base_alias, base_column),
+        ))
+        parsed_domain = ast.literal_eval(line.agg_domain or '[]')
+        if parsed_domain:
+            compiled = Domain(parsed_domain).optimize_full(target_model)
+            query.add_where(compiled._to_sql(target_model, 't', query))
+
+        measure_sql = SQL(
+            "%s(%s)", SQL(sql_func), SQL.identifier('t', line.agg_measure_field_id.name))
+        subselect = query.subselect(measure_sql)
+        return self.env.cr.mogrify(subselect.code, subselect.params).decode()
 
     # ------------------------------------------------------------------
     # Expression compiler
@@ -479,24 +509,34 @@ class KsReportBuilder(models.Model):
             })
 
     def _ks_view_arch(self, view_type):
+        """Build the pivot/list arch. ``kind='aggregate'`` columns get an
+        ``avg="Label"`` footer/measure instead of ``sum`` - see the matching
+        comment on ``IrModelFields._instanciate_attrs`` in ir_model.py for
+        why 'sum' is always wrong for these (a repeated per-dimension lookup,
+        not a per-row fact) and why 'avg' is the correct choice specifically
+        when grouped by the same dimension the column is correlated on
+        (which is the normal way to use one in a pivot). The list/pivot arch
+        must agree with the field's own ``aggregator`` - declaring a
+        different aggregator here than the field actually has raises errors
+        client-side ("No aggregate function has been provided...").
+        """
         self.ensure_one()
+        numeric = self.field_ids.filtered(lambda line: line.ttype in KS_NUMERIC_TYPES)
         if view_type == 'list':
             columns = ''.join(
                 '<field name="%s"%s/>' % (
                     line.column_name,
-                    ' sum="%s"' % line.label if line.ttype in KS_NUMERIC_TYPES else '')
+                    (' avg="%s"' if line.kind == 'aggregate' else ' sum="%s"') % line.label
+                    if line in numeric else '')
                 for line in self.field_ids)
             return '<list string="%s" create="false" edit="false">%s</list>' % (
                 self.name, columns)
         rows = self.field_ids.filtered(
             lambda line: line.ttype not in KS_NUMERIC_TYPES)[:1]
-        measures = self.field_ids.filtered(
-            lambda line: line.ttype in KS_NUMERIC_TYPES)
         elements = ''.join(
             '<field name="%s" type="row"/>' % line.column_name for line in rows)
         elements += ''.join(
-            '<field name="%s" type="measure"/>' % line.column_name
-            for line in measures)
+            '<field name="%s" type="measure"/>' % line.column_name for line in numeric)
         return '<pivot string="%s">%s</pivot>' % (self.name, elements)
 
     def _ks_create_ui(self):

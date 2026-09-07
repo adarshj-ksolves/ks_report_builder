@@ -64,6 +64,20 @@ def ks_walk_path(env, model_name, path):
         raise ValidationError(_(
             "%(f)s is a %(t)s and cannot be used as a column.",
             f=segments[-1], t=field.type))
+    if getattr(field, 'translate', False):
+        # Translated fields (translate=True) store a jsonb blob of
+        # {lang_code: value} in Postgres, not a plain scalar column (Odoo
+        # resolves the current language in Python at read time, not via a
+        # single SQL expression) - selecting the raw column hands the
+        # generated field a dict instead of a string, which the web client
+        # can't render (pivot row headers show "[object Object]", grouping
+        # breaks because every row's blob is a distinct dict). Hardcoding one
+        # language via ->> would silently misreport for any other UI
+        # language, so this is rejected rather than half-supported.
+        raise ValidationError(_(
+            "%(f)s is a translated field and cannot be used as a column or "
+            "correlation key (its stored value is per-language, not a "
+            "single value).", f=segments[-1]))
     return field
 
 

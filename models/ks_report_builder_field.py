@@ -1,3 +1,5 @@
+import ast
+
 from odoo import api, fields, models, _
 from odoo.exceptions import ValidationError
 
@@ -76,6 +78,20 @@ class KsReportBuilderField(models.Model):
         domain="[('transient', '=', False), ('abstract', '=', False)]",
         help="The unrelated table to aggregate from, e.g. Stock Quant.",
     )
+    agg_model_technical_name = fields.Char(
+        related='agg_model_id.model',
+        string='From Model Technical Name',
+        help="Used to point the Filter domain widget at the From Model - it "
+             "needs the technical name as a string, not the agg_model_id "
+             "many2one value.",
+    )
+    agg_domain = fields.Char(
+        string='Filter',
+        help="Restricts which rows of the From Model are aggregated, e.g. "
+             "only internal locations for a stock quantity lookup. Written "
+             "against the From Model's own fields. Leave empty to aggregate "
+             "every matching row.",
+    )
     agg_link_field_id = fields.Many2one(
         comodel_name='ir.model.fields',
         string='Link Field',
@@ -152,6 +168,28 @@ class KsReportBuilderField(models.Model):
                         "Column %s: complete the aggregate lookup - correlation "
                         "field, source model, link field, aggregated field and "
                         "aggregator are all required.", line.label or '?'))
+
+    @api.constrains('kind', 'agg_domain')
+    def _check_agg_domain(self):
+        for line in self:
+            if line.kind != 'aggregate' or not line.agg_domain:
+                continue
+            try:
+                parsed = ast.literal_eval(line.agg_domain)
+                assert isinstance(parsed, list)
+            except (ValueError, SyntaxError, AssertionError) as error:
+                raise ValidationError(_(
+                    "Column %s: Filter must be a valid domain list.",
+                    line.label)) from error
+            if not line.agg_model_id:
+                continue  # _check_definition already raises for incompleteness
+            from odoo.orm.domains import Domain
+            try:
+                Domain(parsed).optimize_full(line.env[line.agg_model_id.model])
+            except Exception as error:
+                raise ValidationError(_(
+                    "Column %(c)s: invalid Filter (%(e)s).",
+                    c=line.label, e=str(error))) from error
 
     @api.constrains('kind', 'agg_base_path', 'agg_model_id', 'agg_link_field_id',
                      'agg_measure_field_id')

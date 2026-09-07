@@ -70,6 +70,7 @@
                                     <field name="agg_model_id" string="From Model"
                                         readonly="kind != 'aggregate'"
                                         options="{'no_create': True}"/>
+                                    <field name="agg_model_technical_name" column_invisible="True"/>
                                     <field name="agg_link_field_id" string="Link Field"
                                         readonly="kind != 'aggregate'"
                                         options="{'no_create': True}"/>
@@ -77,6 +78,9 @@
                                         readonly="kind != 'aggregate'"
                                         options="{'no_create': True}"/>
                                     <field name="agg_function"
+                                        readonly="kind != 'aggregate'"/>
+                                    <field name="agg_domain" string="Filter" widget="domain"
+                                        options="{'model': 'agg_model_technical_name', 'in_dialog': True}"
                                         readonly="kind != 'aggregate'"/>
                                     <field name="label"/>
                                     <field name="ttype" optional="hide"/>

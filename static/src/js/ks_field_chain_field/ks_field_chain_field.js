@@ -21,6 +21,15 @@ export class KsFieldChainField extends FieldSelectorField {
         if (!KS_SCALAR_TYPES.has(fieldDef.type)) {
             return false;
         }
+        if (fieldDef.translate) {
+            // translate=True fields (e.g. product.template.name) store a
+            // per-language jsonb blob, not a plain scalar column - kept in
+            // sync with the server-side rejection in ks_walk_path
+            // (models/ks_field_path_mixin.py), which is the actual
+            // enforcement; this only keeps them out of the picker so a user
+            // doesn't pick one only to hit a save-time error.
+            return false;
+        }
         // Stored fields resolve directly; _inherits-delegated fields (e.g.
         // product.product.list_price, physically on product.template)
         // default to store=False in Odoo 19 even though they're backed by a
