@@ -1,0 +1,255 @@
+.ks_designer {
+    background: #f8f9fa;
+    // The domain editor and the expanded preview are position:absolute;
+    // inset:0 overlays (see .ks_designer_modal below). Without a positioned
+    // ancestor here, "inset:0" resolves against whatever the nearest
+    // positioned ancestor further up happens to be - observed live: the
+    // overlay covered only part of the screen and left the Columns panel
+    // visible and clickable beside it, not a real modal at all. This makes
+    // .ks_designer itself that ancestor, so an overlay always spans the
+    // WHOLE designer (canvas + panel), regardless of what wraps it.
+    position: relative;
+
+    .ks_designer_bar {
+        background: #fff;
+    }
+    .ks_designer_name { max-width: 240px; }
+
+    .ks_designer_dropdown {
+        position: absolute;
+        z-index: 30;
+        top: 100%;
+        left: 0;
+        min-width: 320px;
+        background: #fff;
+        border: 1px solid #dee2e6;
+        border-radius: .25rem;
+        max-height: 320px;
+        overflow-y: auto;
+    }
+    .ks_designer_dropdown_item {
+        padding: .35rem .6rem;
+        cursor: pointer;
+        &:hover { background: #eef2ff; }
+    }
+
+    // ---- canvas -------------------------------------------------------
+    .ks_designer_canvas {
+        overflow: auto;
+        // room to drag nodes around without the canvas collapsing
+        min-height: 600px;
+        background-image: radial-gradient(#dee2e6 1px, transparent 1px);
+        background-size: 18px 18px;
+    }
+
+    .ks_designer_empty {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        pointer-events: none;
+    }
+
+    .ks_designer_links {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        line { stroke: #9aa5b1; stroke-width: 2; }
+        text { fill: #6c757d; font-size: 11px; }
+    }
+
+    .ks_designer_node {
+        position: absolute;
+        width: 290px;
+        background: #fff;
+        border: 1px solid #ced4da;
+        border-radius: .35rem;
+        user-select: none;
+        z-index: 2;
+
+        &.ks_designer_node_list { border-color: #f0ad4e; }
+    }
+    .ks_designer_node_head {
+        padding: .35rem .5rem;
+        background: #f1f3f5;
+        border-bottom: 1px solid #dee2e6;
+        border-radius: .35rem .35rem 0 0;
+        cursor: move;
+    }
+    .ks_designer_filter {
+        margin: .35rem .5rem .1rem;
+        width: calc(100% - 1rem);
+        height: 26px;
+        font-size: 12px;
+    }
+    .ks_designer_node_body {
+        max-height: 300px;
+        overflow-y: auto;
+        padding-bottom: .25rem;
+    }
+    .ks_designer_section {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        color: #868e96;
+        padding: .3rem .5rem .15rem;
+    }
+    .ks_designer_field {
+        padding: .15rem .5rem;
+        cursor: grab;
+        font-size: 13px;
+        &:hover { background: #eef2ff; }
+        &:active { cursor: grabbing; }
+    }
+    .ks_designer_rel {
+        padding: .15rem .5rem;
+        cursor: pointer;
+        font-size: 13px;
+        color: #0d6efd;
+        &:hover { background: #e7f1ff; }
+    }
+
+    // ---- columns panel ------------------------------------------------
+    .ks_designer_panel {
+        width: 380px;
+        flex: 0 0 380px;
+        background: #fff;
+        // header + scrollable column list + preview (own scroll) stacked
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+    }
+    .ks_designer_drop_hint {
+        margin: .75rem;
+        padding: 1.25rem .5rem;
+        text-align: center;
+        border: 2px dashed #ced4da;
+        border-radius: .35rem;
+        font-size: 13px;
+    }
+    .ks_designer_col {
+        padding: .4rem .5rem;
+        border-bottom: 1px solid #f1f3f5;
+        cursor: grab;
+        &:hover { background: #f8f9fa; }
+    }
+    .ks_designer_col_path {
+        font-size: 11px;
+        font-family: monospace;
+        word-break: break-all;
+    }
+    .ks_designer_col_via {
+        font-size: 11px;
+        font-style: italic;
+    }
+    .ks_designer_col_label { height: 26px; font-size: 13px; }
+    .ks_designer_collapse { max-width: 140px; height: 26px; font-size: 12px; }
+}
+
+// ---- aggregate builder ------------------------------------------------
+.ks_designer .ks_designer_aggpanel {
+    position: absolute;
+    z-index: 20;
+    top: 12px;
+    right: 12px;
+    width: 330px;
+    background: #fff;
+    border: 1px solid #ced4da;
+    border-radius: .35rem;
+
+    .ks_designer_aggpanel_head {
+        padding: .4rem .5rem;
+        background: #eef2ff;
+        border-bottom: 1px solid #dee2e6;
+        border-radius: .35rem .35rem 0 0;
+    }
+    .ks_designer_agglist {
+        max-height: 190px;
+        overflow-y: auto;
+        border: 1px solid #e9ecef;
+        border-radius: .25rem;
+    }
+    .ks_designer_agg_active { background: #e7f1ff; font-weight: 600; }
+    .form-label { font-size: 11px; }
+}
+
+// ---- domain editor overlay -------------------------------------------
+.ks_designer .ks_designer_modal {
+    position: absolute;
+    inset: 0;
+    z-index: 40;
+    background: rgba(0, 0, 0, .35);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    .ks_designer_modal_box {
+        background: #fff;
+        border-radius: .4rem;
+        // NB: not `min(760px, 92%)` - Sass evaluates min() itself and dies
+        // on mixed units ("Incompatible units"), which fails the whole
+        // backend style bundle, not just this file.
+        width: 92%;
+        max-width: 760px;
+        max-height: 80%;
+        overflow: auto;
+    }
+    .ks_designer_modal_head {
+        padding: .5rem .75rem;
+        border-bottom: 1px solid #dee2e6;
+    }
+    .ks_designer_modal_foot { border-top: 1px solid #dee2e6; }
+}
+
+// ---- live preview -----------------------------------------------------
+.ks_designer .ks_designer_preview {
+    flex: 0 0 auto;
+    max-height: 260px;
+    display: flex;
+    flex-direction: column;
+    background: #fbfbfb;
+
+    .ks_designer_preview_scroll {
+        overflow: auto;
+        flex: 1 1 auto;
+    }
+    table {
+        font-size: 12px;
+        white-space: nowrap;
+        th {
+            position: sticky;
+            top: 0;
+            background: #fbfbfb;
+            color: #6c757d;
+            font-weight: 600;
+            padding: .25rem .5rem;
+        }
+        td {
+            padding: .2rem .5rem;
+            border-top: 1px solid #f1f3f5;
+        }
+    }
+}
+
+// ---- expanded preview dialog -------------------------------------------
+.ks_designer .ks_designer_preview_modal_box {
+    width: 92%;
+    max-width: 1100px;
+}
+.ks_designer .ks_designer_preview_modal_scroll {
+    max-height: 65vh;
+    overflow: auto;
+
+    table {
+        font-size: 13px;
+        th {
+            position: sticky;
+            top: 0;
+            background: #fff;
+            z-index: 1;
+        }
+    }
+}

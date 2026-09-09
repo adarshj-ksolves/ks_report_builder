@@ -17,6 +17,14 @@ KS_SCALAR_TYPES = (
 # exactly, in case a path is set via RPC rather than through the widget.
 KS_TRAVERSABLE_TYPES = ('many2one',)
 
+# x2many relations are NOT added to KS_TRAVERSABLE_TYPES on purpose: that
+# constant governs the JOIN builder, and joining a list really would fan out
+# rows (Invariant #3, unchanged). They are instead crossed by collapsing the
+# whole list to ONE scalar inside a correlated subquery - the same mechanism
+# kind='aggregate' already uses - so the outer query still returns exactly one
+# row per base record. See ks_split_path / _ks_build_flatten_subquery.
+KS_X2MANY_TYPES = ('one2many', 'many2many')
+
 # monetary needs a currency_field companion and selection needs
 # ir.model.fields.selection rows, neither of which a generated column can
 # supply reliably, so both degrade to a simpler type.
@@ -64,21 +72,144 @@ def ks_walk_path(env, model_name, path):
         raise ValidationError(_(
             "%(f)s is a %(t)s and cannot be used as a column.",
             f=segments[-1], t=field.type))
-    if getattr(field, 'translate', False):
-        # Translated fields (translate=True) store a jsonb blob of
-        # {lang_code: value} in Postgres, not a plain scalar column (Odoo
-        # resolves the current language in Python at read time, not via a
-        # single SQL expression) - selecting the raw column hands the
-        # generated field a dict instead of a string, which the web client
-        # can't render (pivot row headers show "[object Object]", grouping
-        # breaks because every row's blob is a distinct dict). Hardcoding one
-        # language via ->> would silently misreport for any other UI
-        # language, so this is rejected rather than half-supported.
-        raise ValidationError(_(
-            "%(f)s is a translated field and cannot be used as a column or "
-            "correlation key (its stored value is per-language, not a "
-            "single value).", f=segments[-1]))
     return field
+
+
+def ks_split_path(env, model_name, path):
+    """Walk a dotted path that may cross AT MOST ONE x2many hop.
+
+    ``ks_walk_path`` above stays strictly many2one-only (it backs snapshot
+    fields and the aggregate correlation key, where a list makes no sense).
+    This is its superset, used for report columns: it additionally allows one
+    one2many/many2many hop, which the SQL builder then collapses to a single
+    value with a correlated subquery rather than a join.
+
+    Returns a dict:
+      ``prefix``       many2one path from the base model to the model that
+                       OWNS the list ('' when the list is on the base model)
+      ``owner_model``  technical name of that owning model
+      ``x2many``       the x2many ``Field``, or None for a plain m2o path
+      ``suffix``       path INSIDE the child model, from the list down to the
+                       final scalar ('' when the list itself is the last
+                       segment - only a Count collapse is meaningful then)
+      ``field``        the terminal scalar ``Field``, or None when the list
+                       itself is the last segment
+    """
+    if not path:
+        raise ValidationError(_("Pick the source field."))
+    segments = path.split('.')
+    x2many = None
+    x2many_index = None
+    owner_model = model_name
+    current = model_name
+    final_field = None
+
+    for index, segment in enumerate(segments):
+        model = env.get(current)
+        if model is None:
+            raise ValidationError(_("Model %s does not exist.", current))
+        field = model._fields.get(segment)
+        if field is None:
+            raise ValidationError(_(
+                "Field %(f)s does not exist on %(m)s.", f=segment, m=current))
+        is_last = index == len(segments) - 1
+
+        if field.type in KS_X2MANY_TYPES:
+            if x2many is not None:
+                raise ValidationError(_(
+                    "%(p)s goes through more than one list. Only one "
+                    "one2many/many2many can be flattened per column - after "
+                    "the first list, only single relations can be followed.",
+                    p=path))
+            x2many, x2many_index, owner_model = field, index, current
+            current = field.comodel_name
+            continue
+
+        if is_last:
+            final_field = field
+            break
+
+        if field.type not in KS_TRAVERSABLE_TYPES:
+            raise ValidationError(_(
+                "%(f)s is a %(t)s and cannot be drilled into.",
+                f=segment, t=field.type))
+        current = field.comodel_name
+
+    if final_field is not None:
+        if final_field.type not in KS_SCALAR_TYPES:
+            raise ValidationError(_(
+                "%(f)s is a %(t)s and cannot be used as a column.",
+                f=segments[-1], t=final_field.type))
+
+    return {
+        'prefix': '.'.join(segments[:x2many_index]) if x2many_index is not None else '',
+        'owner_model': owner_model,
+        'x2many': x2many,
+        'suffix': '.'.join(segments[x2many_index + 1:]) if x2many_index is not None else '',
+        'field': final_field,
+    }
+
+
+def ks_x2many_sql_info(env, field, owner_model_name):
+    """Validate that ``field`` (a one2many/many2many) is backed by real tables
+    and return everything needed to correlate a subquery back to its owner.
+
+    Verified against the Odoo 19 source (odoo/orm/fields_relational.py):
+    - a One2many's ``inverse_name`` is NOT guaranteed to be a stored many2one:
+      it may be absent entirely, non-stored/computed (`:1171-1187` falls back
+      to Python), or a ``many2one_reference`` generic FK (`:952`).
+    - a Many2many's ``relation``/``column1``/``column2`` are filled lazily in
+      ``setup_nonrelated`` and are explicitly set to None when the field is
+      not stored (`:1292`), so all three must be checked.
+    - ``get_comodel_domain()`` (`:99-110`) returns the field's own ``domain=``
+      AND, for One2many, ``_additional_domain`` (`:906-912`) which adds the
+      ``res_model``-style discriminator for a generic FK. Applying it is NOT
+      optional: without it, a one2many over a model keyed by res_model/res_id
+      (mail.message, ir.attachment) silently matches OTHER models' rows that
+      happen to share the same numeric id.
+    """
+    if not field.store:
+        raise ValidationError(_(
+            "%s is not stored, so it has no rows to flatten.", field.name))
+    comodel = env.get(field.comodel_name)
+    if comodel is None or not comodel._auto:
+        raise ValidationError(_(
+            "%(f)s points at %(m)s, which is not backed by a real table.",
+            f=field.name, m=field.comodel_name))
+
+    info = {
+        'child_model': field.comodel_name,
+        'child_table': comodel._table,
+        # The field's own domain= plus (for o2m) the generic-FK discriminator.
+        'domain': field.get_comodel_domain(env[owner_model_name]),
+    }
+    if field.type == 'one2many':
+        if not field.inverse_name:
+            raise ValidationError(_(
+                "%s has no inverse field, so there is no column to match "
+                "child rows on.", field.name))
+        inverse = comodel._fields.get(field.inverse_name)
+        if inverse is None or not inverse.store:
+            raise ValidationError(_(
+                "The inverse field of %s is not stored, so there is no "
+                "column to match child rows on.", field.name))
+        if inverse.type not in ('many2one', 'many2one_reference'):
+            raise ValidationError(_(
+                "The inverse field of %(f)s is a %(t)s, which is not "
+                "supported.", f=field.name, t=inverse.type))
+        info.update(mode='one2many', inverse_column=inverse.name)
+    else:
+        if not (field.relation and field.column1 and field.column2):
+            raise ValidationError(_(
+                "%s has no relation table, so its rows cannot be matched.",
+                field.name))
+        info.update(
+            mode='many2many',
+            rel_table=field.relation,
+            rel_owner_column=field.column1,
+            rel_child_column=field.column2,
+        )
+    return info
 
 
 class KsFieldPathMixin(models.AbstractModel):
@@ -132,6 +263,14 @@ class KsFieldPathMixin(models.AbstractModel):
                 # Leave a transiently invalid path (e.g. mid-edit via RPC)
                 # with a harmless default; _check_path enforces validity for
                 # real at save time.
+                line.ttype = 'float'
+                line.relation = False
+                continue
+            if field is None:
+                # A subclass whose _ks_walk_path allows a path ending on the
+                # list itself (flatten + Count) has no terminal field to type
+                # from; it overrides _compute_ttype_relation to set the real
+                # type after this super() call.
                 line.ttype = 'float'
                 line.relation = False
                 continue

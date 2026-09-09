@@ -23,12 +23,16 @@ columns accept arithmetic only, validated through an AST whitelist.
         'views/ks_report_builder_views.xml',
         'views/ks_report_builder_menus.xml',
         'views/ks_report_snapshot_views.xml',
+        'views/ks_report_designer_views.xml',
     ],
     'assets': {
         'web.assets_backend': [
             'ks_report_builder/static/src/js/ks_expression_field/ks_expression_field.js',
             'ks_report_builder/static/src/js/ks_expression_field/ks_expression_field.xml',
             'ks_report_builder/static/src/js/ks_field_chain_field/ks_field_chain_field.js',
+            'ks_report_builder/static/src/js/ks_report_designer/ks_report_designer.js',
+            'ks_report_builder/static/src/js/ks_report_designer/ks_report_designer.xml',
+            'ks_report_builder/static/src/scss/ks_report_designer.scss',
         ],
     },
     'installable': True,

@@ -21,15 +21,12 @@ export class KsFieldChainField extends FieldSelectorField {
         if (!KS_SCALAR_TYPES.has(fieldDef.type)) {
             return false;
         }
-        if (fieldDef.translate) {
-            // translate=True fields (e.g. product.template.name) store a
-            // per-language jsonb blob, not a plain scalar column - kept in
-            // sync with the server-side rejection in ks_walk_path
-            // (models/ks_field_path_mixin.py), which is the actual
-            // enforcement; this only keeps them out of the picker so a user
-            // doesn't pick one only to hit a save-time error.
-            return false;
-        }
+        // NOTE: translate=True fields (product names, tag names) ARE
+        // selectable. They are stored as a per-language jsonb blob, which the
+        // query builder unwraps with ->> using the report's own Report
+        // Language (see _ks_field_sql in models/ks_report_builder.py). They
+        // used to be filtered out here, which blocked most of the fields
+        // people actually want to report on.
         // Stored fields resolve directly; _inherits-delegated fields (e.g.
         // product.product.list_price, physically on product.template)
         // default to store=False in Odoo 19 even though they're backed by a
@@ -50,10 +47,36 @@ export class KsFieldChainField extends FieldSelectorField {
     // the Label directly, same as every other field.
 }
 
+// Report COLUMNS additionally allow one one2many/many2many hop, which the
+// query builder collapses to a single value with a correlated subquery (the
+// "When Multiple" choice on the column). Kept as a separate widget rather
+// than an option on the base one so that snapshot fields and the aggregate
+// correlation key - where a list genuinely makes no sense - keep using the
+// stricter many2one-only picker and can't be pointed at a list by accident.
+const KS_X2MANY_TYPES = new Set(["one2many", "many2many"]);
+
+export class KsFieldChainListField extends KsFieldChainField {
+    filter(fieldDef) {
+        if (KS_X2MANY_TYPES.has(fieldDef.type)) {
+            // Non-stored x2many has no rows to read; the server rejects it
+            // too (ks_x2many_sql_info in ks_field_path_mixin.py).
+            return Boolean(fieldDef.store);
+        }
+        return super.filter(fieldDef);
+    }
+}
+
 export const ksFieldChainField = {
     ...fieldSelectorField,
     component: KsFieldChainField,
     displayName: "Field Chain",
 };
 
+export const ksFieldChainListField = {
+    ...fieldSelectorField,
+    component: KsFieldChainListField,
+    displayName: "Field Chain (lists allowed)",
+};
+
 registry.category("fields").add("ks_field_chain_picker", ksFieldChainField);
+registry.category("fields").add("ks_field_chain_list_picker", ksFieldChainListField);

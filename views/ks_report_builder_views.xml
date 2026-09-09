@@ -28,9 +28,15 @@
                     <button name="action_undeploy" string="Undeploy" type="object"
                         invisible="state != 'deployed'"
                         confirm="This removes the generated model, views and menu. The definition is kept."/>
+                    <button name="action_open_designer" string="Edit in Designer" type="object"
+                        title="Reopen these columns on the visual canvas. If this report is deployed, Undeploy it first - saving from the designer replaces the whole column set."/>
                     <field name="state" widget="statusbar" statusbar_visible="draft,deployed"/>
                 </header>
                 <sheet>
+                    <div class="alert alert-warning" role="alert"
+                        invisible="not deploy_warning">
+                        <field name="deploy_warning" readonly="1" nolabel="1"/>
+                    </div>
                     <div class="oe_title">
                         <label for="name"/>
                         <h1><field name="name" placeholder="e.g. Product-wise Discount"/></h1>
@@ -41,9 +47,14 @@
                             <field name="base_model_name" invisible="1"/>
                             <field name="domain" widget="domain"
                                 options="{'model': 'base_model_name', 'in_dialog': True}"/>
+                            <field name="model_name" invisible="1"/>
+                            <field name="result_domain" widget="domain"
+                                invisible="state != 'deployed'"
+                                options="{'model': 'model_name', 'in_dialog': True}"/>
                         </group>
                         <group>
                             <field name="group_ids" widget="many2many_tags"/>
+                            <field name="lang_id" options="{'no_create': True}"/>
                             <field name="create_menu"/>
                             <field name="menu_parent_id" invisible="not create_menu"
                                 options="{'no_create': True}"/>
@@ -52,40 +63,63 @@
                     </group>
                     <notebook>
                         <page string="Columns" name="columns">
-                            <field name="field_ids">
-                                <list editable="bottom">
+                            <!-- The list stays deliberately narrow: Type,
+                                 a plain-language Definition and the Label.
+                                 Everything kind-specific lives in the form
+                                 dialog below, where it can be grouped and
+                                 shown only when it actually applies - the
+                                 previous editable list carried 11 columns at
+                                 once and pushed Label off-screen. -->
+                            <field name="field_ids" mode="list">
+                                <list>
                                     <field name="sequence" widget="handle"/>
-                                    <field name="base_model_id" column_invisible="True"/>
-                                    <field name="base_model_technical_name" column_invisible="True"/>
                                     <field name="kind"/>
-                                    <field name="path" widget="ks_field_chain_picker"
-                                        options="{'model': 'base_model_technical_name'}"
-                                        readonly="kind != 'path'"/>
-                                    <field name="expression" widget="ks_expression_picker"
-                                        readonly="kind != 'expression'"/>
-                                    <field name="agg_base_path" string="Correlate On"
-                                        widget="ks_field_chain_picker"
-                                        options="{'model': 'base_model_technical_name'}"
-                                        readonly="kind != 'aggregate'"/>
-                                    <field name="agg_model_id" string="From Model"
-                                        readonly="kind != 'aggregate'"
-                                        options="{'no_create': True}"/>
-                                    <field name="agg_model_technical_name" column_invisible="True"/>
-                                    <field name="agg_link_field_id" string="Link Field"
-                                        readonly="kind != 'aggregate'"
-                                        options="{'no_create': True}"/>
-                                    <field name="agg_measure_field_id" string="Aggregate Field"
-                                        readonly="kind != 'aggregate'"
-                                        options="{'no_create': True}"/>
-                                    <field name="agg_function"
-                                        readonly="kind != 'aggregate'"/>
-                                    <field name="agg_domain" string="Filter" widget="domain"
-                                        options="{'model': 'agg_model_technical_name', 'in_dialog': True}"
-                                        readonly="kind != 'aggregate'"/>
+                                    <field name="definition"/>
                                     <field name="label"/>
                                     <field name="ttype" optional="hide"/>
                                     <field name="column_name" optional="hide"/>
                                 </list>
+                                <form string="Column">
+                                    <group>
+                                        <field name="base_model_id" invisible="1"/>
+                                        <field name="base_model_technical_name" invisible="1"/>
+                                        <field name="flat_model_name" invisible="1"/>
+                                        <field name="label" placeholder="e.g. Total Sold"/>
+                                        <field name="kind"/>
+                                        <field name="searchable"/>
+                                        <field name="groupable"/>
+                                    </group>
+                                    <group string="Field" invisible="kind != 'path'">
+                                        <field name="path" widget="ks_field_chain_list_picker"
+                                            options="{'model': 'base_model_technical_name'}"
+                                            nolabel="0"/>
+                                        <div colspan="2" class="text-muted"
+                                            invisible="not flat_model_name">
+                                            This field goes through a list, so one record
+                                            matches many rows. Choose how to reduce them:
+                                        </div>
+                                        <field name="collapse" invisible="not flat_model_name"
+                                            required="flat_model_name"/>
+                                        <field name="flat_domain" widget="domain"
+                                            invisible="not flat_model_name"
+                                            options="{'model': 'flat_model_name', 'in_dialog': True}"/>
+                                    </group>
+                                    <group string="Computed" invisible="kind != 'expression'">
+                                        <field name="expression" widget="ks_expression_picker"
+                                            nolabel="0"/>
+                                    </group>
+                                    <group string="Aggregate" invisible="kind != 'aggregate'">
+                                        <field name="agg_base_path" widget="ks_field_chain_picker"
+                                            options="{'model': 'base_model_technical_name'}"/>
+                                        <field name="agg_model_id" options="{'no_create': True}"/>
+                                        <field name="agg_model_technical_name" invisible="1"/>
+                                        <field name="agg_link_field_id" options="{'no_create': True}"/>
+                                        <field name="agg_measure_field_id" options="{'no_create': True}"/>
+                                        <field name="agg_function"/>
+                                        <field name="agg_domain" widget="domain"
+                                            options="{'model': 'agg_model_technical_name', 'in_dialog': True}"/>
+                                    </group>
+                                </form>
                             </field>
                         </page>
                         <page string="Technical" name="technical" groups="base.group_no_one">

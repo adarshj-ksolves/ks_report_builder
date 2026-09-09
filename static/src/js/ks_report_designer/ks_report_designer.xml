@@ -1,0 +1,448 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+<t t-name="ks_report_builder.KsReportDesigner">
+    <div class="ks_designer d-flex flex-column h-100">
+
+        <!-- toolbar -->
+        <div class="ks_designer_bar d-flex align-items-center gap-2 p-2 border-bottom">
+            <input type="text" class="form-control form-control-sm ks_designer_name"
+                placeholder="Report name"
+                t-model="state.reportName"/>
+            <div class="position-relative" t-if="!state.editingReportId">
+                <input type="text" class="form-control form-control-sm"
+                    t-att-placeholder="state.baseModel ? state.baseModel.name : 'Search a base model…'"
+                    t-model="state.modelQuery"
+                    t-on-input="searchModels"/>
+                <div t-if="state.modelResults.length" class="ks_designer_dropdown shadow">
+                    <div t-foreach="state.modelResults" t-as="rec" t-key="rec.id"
+                        class="ks_designer_dropdown_item"
+                        t-on-click="() => this.pickBaseModel(rec)">
+                        <span t-out="rec.name"/>
+                        <small class="text-muted ms-1" t-out="rec.model"/>
+                    </div>
+                </div>
+            </div>
+            <span t-if="state.baseModel" class="badge text-bg-primary">
+                <t t-out="state.baseModel.name"/>
+            </span>
+            <span t-if="state.editingReportId" class="badge text-bg-info"
+                title="The base model can't be changed once a report exists here - that would invalidate every existing column's path. Undeploy and use the report form for that.">
+                <i class="fa fa-pencil me-1"/>Editing existing report
+            </span>
+            <div class="form-check form-switch ms-2 mb-0">
+                <input class="form-check-input" type="checkbox" id="ks_tech"
+                    t-model="state.showTechnical"/>
+                <label class="form-check-label small" for="ks_tech">Technical fields</label>
+            </div>
+            <div class="flex-grow-1"/>
+            <button t-if="state.baseModel" class="btn btn-secondary btn-sm"
+                t-on-click="openReportDomain">
+                <i class="fa fa-filter me-1"/>Filter
+                <span t-if="state.reportDomain and state.reportDomain !== '[]'"
+                    class="badge text-bg-light ms-1">on</span>
+            </button>
+            <button class="btn btn-primary btn-sm"
+                t-att-disabled="!canCreate"
+                t-on-click="createReport">
+                <t t-out="state.editingReportId ? 'Save Changes' : 'Create Report'"/>
+                <span t-if="state.columns.length" class="badge text-bg-light ms-1"
+                    t-out="state.columns.length"/>
+            </button>
+        </div>
+
+        <div class="d-flex flex-grow-1 overflow-hidden">
+
+            <!-- canvas -->
+            <div class="ks_designer_canvas flex-grow-1 position-relative" t-ref="canvas">
+                <div t-if="state.loadingReport" class="ks_designer_empty text-muted">
+                    <div class="text-center">
+                        <i class="fa fa-spinner fa-spin fa-2x mb-2"/>
+                        <p class="small mb-0">Reconstructing the canvas from this report's columns…</p>
+                    </div>
+                </div>
+                <div t-elif="!state.baseModel" class="ks_designer_empty text-muted">
+                    <div class="text-center">
+                        <p class="h5">Pick a base model to start</p>
+                        <p class="small">
+                            One row of the report will be one record of that model.
+                            Expand its relations to reach further fields, then drag
+                            fields into the Columns panel.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- relation connectors, drawn beneath the cards -->
+                <svg class="ks_designer_links">
+                    <t t-foreach="connectors" t-as="link" t-key="link.id">
+                        <line t-att-x1="link.x1" t-att-y1="link.y1"
+                            t-att-x2="link.x2" t-att-y2="link.y2"
+                            t-att-stroke-dasharray="link.dashed ? '6 4' : ''"/>
+                        <text t-att-x="(link.x1 + link.x2) / 2"
+                            t-att-y="(link.y1 + link.y2) / 2 - 6"
+                            text-anchor="middle" t-out="link.label"/>
+                    </t>
+                </svg>
+
+                <!-- aggregate builder -->
+                <div t-if="state.agg" class="ks_designer_aggpanel shadow">
+                    <div class="ks_designer_aggpanel_head d-flex align-items-center">
+                        <span class="fw-bold">Aggregate against <t t-out="state.agg.node.name"/></span>
+                        <div class="flex-grow-1"/>
+                        <button class="btn btn-sm btn-link p-0" t-on-click="closeAggregate">
+                            <i class="fa fa-times"/>
+                        </button>
+                    </div>
+                    <div class="p-2">
+                        <div class="small text-muted mb-1">
+                            Pulls a total from another table that also points at
+                            <t t-out="state.agg.node.name"/>. Only tables that can
+                            actually be correlated are listed.
+                        </div>
+                        <input type="text" class="form-control form-control-sm mb-1"
+                            placeholder="Search a table to aggregate…"
+                            t-att-value="state.agg.query"
+                            t-on-input="(ev) => { state.agg.query = ev.target.value; this.searchAggregateSources(); }"/>
+                        <div class="ks_designer_agglist">
+                            <div t-foreach="state.agg.sources" t-as="src" t-key="src.id"
+                                class="ks_designer_dropdown_item"
+                                t-att-class="{ 'ks_designer_agg_active': state.agg.source and state.agg.source.id === src.id }"
+                                t-on-click="() => this.pickAggregateSource(src)">
+                                <span t-out="src.name"/>
+                                <small class="text-muted ms-1" t-out="src.model"/>
+                            </div>
+                            <div t-if="!state.agg.sources.length and !state.agg.loading"
+                                class="text-muted small p-2">No table can be aggregated here.</div>
+                        </div>
+
+                        <t t-if="state.agg.fields">
+                            <div class="row g-1 mt-2">
+                                <div class="col-6">
+                                    <label class="form-label small mb-0">Aggregator</label>
+                                    <select class="form-select form-select-sm"
+                                        t-att-value="state.agg.fn"
+                                        t-on-change="(ev) => this.setAgg('fn', ev)">
+                                        <option value="sum">Sum</option>
+                                        <option value="count">Count</option>
+                                        <option value="avg">Average</option>
+                                        <option value="max">Maximum</option>
+                                        <option value="min">Minimum</option>
+                                    </select>
+                                </div>
+                                <div class="col-6">
+                                    <label class="form-label small mb-0">Measure</label>
+                                    <select class="form-select form-select-sm"
+                                        t-att-value="state.agg.measure"
+                                        t-on-change="(ev) => this.setAgg('measure', ev)">
+                                        <option t-foreach="state.agg.fields.measures" t-as="mf"
+                                            t-key="mf.id" t-att-value="mf.id"
+                                            t-out="mf.field_description"/>
+                                    </select>
+                                </div>
+                                <div class="col-12" t-if="state.agg.fields.links.length > 1">
+                                    <label class="form-label small mb-0">Matched on</label>
+                                    <select class="form-select form-select-sm"
+                                        t-att-value="state.agg.link"
+                                        t-on-change="(ev) => this.setAgg('link', ev)">
+                                        <option t-foreach="state.agg.fields.links" t-as="lf"
+                                            t-key="lf.id" t-att-value="lf.id"
+                                            t-out="lf.field_description"/>
+                                    </select>
+                                </div>
+                                <div class="col-12">
+                                    <label class="form-label small mb-0">Label</label>
+                                    <input type="text" class="form-control form-control-sm"
+                                        t-att-value="state.agg.label"
+                                        t-on-input="(ev) => this.setAgg('label', ev)"/>
+                                </div>
+                            </div>
+                            <div class="d-flex align-items-center mt-2">
+                                <button class="btn btn-sm btn-link p-0"
+                                    t-on-click="openAggDomain">
+                                    <i class="fa fa-filter me-1"/>Filter these rows
+                                </button>
+                                <span t-if="state.agg.domain" class="badge text-bg-light ms-1">on</span>
+                            </div>
+                            <button class="btn btn-primary btn-sm w-100 mt-1"
+                                t-att-disabled="!aggregateReady"
+                                t-on-click="addAggregateColumn">Add as column</button>
+                        </t>
+                    </div>
+                </div>
+
+                <!-- model nodes -->
+                <div t-foreach="state.nodes" t-as="node" t-key="node.id"
+                    class="ks_designer_node shadow-sm"
+                    t-att-class="{ 'ks_designer_node_list': node.viaX2many }"
+                    t-attf-style="left:{{node.x}}px; top:{{node.y}}px;"
+                    t-on-pointerdown="(ev) => this.onNodePointerDown(node, ev)">
+
+                    <div class="ks_designer_node_head d-flex align-items-center">
+                        <span class="fw-bold text-truncate" t-out="node.name"/>
+                        <span t-if="node.viaX2many" class="badge text-bg-warning ms-1"
+                            title="Reached through a list: columns from here need a 'When Multiple' rule">list</span>
+                        <div class="flex-grow-1"/>
+                        <button class="btn btn-sm btn-link p-0 ks-no-drag"
+                            t-on-click="() => node.collapsed = !node.collapsed">
+                            <i t-att-class="node.collapsed ? 'fa fa-chevron-down' : 'fa fa-chevron-up'"/>
+                        </button>
+                        <button t-if="canAggregate(node)"
+                            class="btn btn-sm btn-link p-0 ms-2 ks-no-drag"
+                            t-attf-title="Total another table against each {{node.name}}"
+                            t-on-click="() => this.openAggregate(node)">&#931;</button>
+                        <button t-if="node.parentId" class="btn btn-sm btn-link p-0 ms-2 ks-no-drag text-danger"
+                            t-on-click="() => this.removeNode(node)">
+                            <i class="fa fa-times"/>
+                        </button>
+                    </div>
+
+                    <div t-if="!node.collapsed" class="ks_designer_node_body ks-no-drag">
+                        <input type="text" class="form-control form-control-sm ks_designer_filter"
+                            placeholder="Filter fields…"
+                            t-att-value="node.filter"
+                            t-on-input="(ev) => this.setNodeFilter(node, ev)"/>
+
+                        <!-- Relations come FIRST: they are how you navigate to
+                             another model, and burying them under 90 fields
+                             makes the canvas look like it has none. -->
+                        <t t-set="rels" t-value="matching(node, node.relations)"/>
+                        <div t-if="rels.length" class="ks_designer_section">
+                            Relations — click to expand
+                        </div>
+                        <div t-foreach="rels" t-as="r" t-key="r.name"
+                            class="ks_designer_rel"
+                            t-on-click="() => this.expandRelation(node, r)">
+                            <i t-att-class="r.kind === 'x2many' ? 'fa fa-list-ul' : 'fa fa-link'"
+                                class="me-1 small"/>
+                            <span t-out="r.string"/>
+                            <small class="text-muted ms-1" t-out="r.relation"/>
+                        </div>
+
+                        <t t-set="flds" t-value="matching(node, node.columns)"/>
+                        <div t-if="flds.length" class="ks_designer_section">Fields — drag to Columns</div>
+                        <div t-foreach="flds" t-as="f" t-key="f.name"
+                            class="ks_designer_field" draggable="true"
+                            t-on-dragstart="(ev) => this.onFieldDragStart(node, f, ev)"
+                            t-on-dblclick="() => this.addColumn({ path: node.prefix + f.name, field: f })">
+                            <span t-out="f.string"/>
+                            <small class="text-muted ms-1" t-out="f.ttype"/>
+                        </div>
+                        <div t-if="!rels.length and !flds.length" class="text-muted small px-2 py-1">
+                            Nothing matches that filter.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- columns panel -->
+            <div class="ks_designer_panel border-start d-flex flex-column"
+                t-on-dragover="onPanelDragOver"
+                t-on-drop="(ev) => this.onPanelDrop(ev)">
+                <div class="p-2 border-bottom fw-bold">
+                    Columns
+                    <small class="text-muted fw-normal">drop fields here</small>
+                </div>
+
+                <div t-if="!state.columns.length" class="ks_designer_drop_hint text-muted">
+                    Drag a field from the canvas
+                </div>
+
+                <div t-if="misalignedListModels.length" class="alert alert-warning m-2 p-2 small mb-0">
+                    <i class="fa fa-exclamation-triangle me-1"/>
+                    Two "List as text" columns come from the same list - their
+                    values won't line up row-for-row (e.g. the 2nd Product and
+                    the 2nd Quantity aren't necessarily the same line). Use
+                    First/Last if you want one matched value, or make that
+                    list your report's base model for one row per line.
+                </div>
+
+                <div class="flex-grow-1 overflow-auto">
+                    <div t-foreach="state.columns" t-as="col" t-key="col.path + '_' + col_index"
+                        class="ks_designer_col" draggable="true"
+                        t-on-dragstart="(ev) => this.onColumnDragStart(col_index, ev)"
+                        t-on-dragover="onPanelDragOver"
+                        t-on-drop="(ev) => this.onPanelDrop(ev, col_index)">
+                        <div class="d-flex align-items-center">
+                            <i class="fa fa-bars text-muted me-2 small"/>
+                            <input type="text" class="form-control form-control-sm ks_designer_col_label"
+                                t-att-value="col.label"
+                                t-on-input="(ev) => this.setColumnLabel(col, ev)"/>
+                            <button class="btn btn-sm btn-link text-danger p-0 ms-1"
+                                t-on-click="() => this.removeColumn(col_index)">
+                                <i class="fa fa-times"/>
+                            </button>
+                        </div>
+                        <div class="ks_designer_col_path text-muted" t-out="col.path"/>
+                        <div t-if="col.crossesList" class="ks_designer_col_via text-muted"
+                            t-att-class="{ 'text-warning fw-bold': col.collapse === 'list' and misalignedListModels.includes(col.listModel) }">
+                            via <t t-out="col.listModel"/>
+                        </div>
+                        <div t-if="col.kind === 'aggregate'" class="mt-1">
+                            <span class="badge text-bg-info" t-out="col.aggFunction"/>
+                        </div>
+                        <div t-if="col.crossesList" class="d-flex align-items-center gap-1 mt-1">
+                            <small class="text-muted">When multiple:</small>
+                            <select class="form-select form-select-sm ks_designer_collapse"
+                                t-att-value="col.collapse"
+                                t-on-change="(ev) => this.setColumnCollapse(col, ev)">
+                                <option value="list">List as text</option>
+                                <option value="first">First</option>
+                                <option value="last">Last</option>
+                                <option value="count">Count</option>
+                            </select>
+                            <button class="btn btn-sm btn-link p-0 ms-1"
+                                t-attf-title="Filter which {{col.listModel}} rows count"
+                                t-on-click="() => this.openColumnDomain(col_index)">
+                                <i class="fa fa-filter"
+                                    t-att-class="{ 'text-primary': col.flat_domain }"/>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- live preview: real data from the real query builder, with
+                     ZERO writes (ks_preview) - refreshed after every change
+                     that could affect the result, debounced. Shows a mistake
+                     (wrong filter, an aggregate returning nothing) before the
+                     user commits to Create Report rather than after. -->
+                <div class="ks_designer_preview border-top">
+                    <div class="p-2 border-bottom d-flex align-items-center">
+                        <span class="fw-bold small">Preview</span>
+                        <span t-if="state.preview and !state.preview.loading and state.preview.ok"
+                            class="badge text-bg-secondary ms-2"
+                            t-out="state.preview.total + ' row' + (state.preview.total === 1 ? '' : 's')"/>
+                        <i t-if="state.preview and state.preview.loading"
+                            class="fa fa-spinner fa-spin ms-2 text-muted"/>
+                        <div class="flex-grow-1"/>
+                        <button class="btn btn-sm btn-link p-0 me-2"
+                            t-att-disabled="!state.baseModel or !state.columns.length"
+                            title="Open in a bigger window (up to 200 rows)"
+                            t-on-click="openPreviewDialog">
+                            <i class="fa fa-expand"/>
+                        </button>
+                        <button class="btn btn-sm btn-link p-0"
+                            t-att-disabled="!state.baseModel or !state.columns.length or (state.preview and state.preview.loading)"
+                            title="Refresh preview now"
+                            t-on-click="forceRefreshPreview">
+                            <i class="fa fa-refresh"/>
+                        </button>
+                    </div>
+                    <div t-if="!state.preview" class="text-muted small p-2">
+                        Add a column to see real data here.
+                    </div>
+                    <div t-elif="state.preview.error" class="alert alert-danger m-2 mb-0 p-2 small">
+                        <t t-out="state.preview.error"/>
+                    </div>
+                    <div t-elif="!state.preview.loading and state.preview.ok"
+                        class="ks_designer_preview_scroll">
+                        <table class="table table-sm table-borderless mb-0">
+                            <thead>
+                                <tr>
+                                    <th t-foreach="state.preview.columns" t-as="pc" t-key="pc.name"
+                                        t-out="pc.label"/>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr t-foreach="state.preview.rows" t-as="prow" t-key="prow_index">
+                                    <td t-foreach="state.preview.columns" t-as="pc" t-key="pc.name"
+                                        t-out="formatCell(prow[pc.name])"/>
+                                </tr>
+                                <tr t-if="!state.preview.rows.length">
+                                    <td t-att-colspan="state.preview.columns.length"
+                                        class="text-muted text-center">No matching rows</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <div t-if="state.preview.total > state.preview.rows.length"
+                            class="text-muted small p-2 border-top">
+                            Showing <t t-out="state.preview.rows.length"/> of
+                            <t t-out="state.preview.total"/> rows.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- domain editor: one overlay for the report Filter, a list column's
+             filter and an aggregate's filter (see openReportDomain etc.) -->
+        <div t-if="state.domainEditor" class="ks_designer_modal">
+            <div class="ks_designer_modal_box shadow-lg">
+                <div class="ks_designer_modal_head d-flex align-items-center">
+                    <span class="fw-bold" t-out="state.domainEditor.title"/>
+                    <div class="flex-grow-1"/>
+                    <button class="btn btn-sm btn-link p-0" t-on-click="closeDomain">
+                        <i class="fa fa-times"/>
+                    </button>
+                </div>
+                <div class="p-3">
+                    <DomainSelector
+                        resModel="state.domainEditor.resModel"
+                        domain="state.domainEditor.domain"
+                        readonly="false"
+                        isDebugMode="!!env.debug"
+                        update="(d) => this.onDomainChange(d)"/>
+                </div>
+                <div class="ks_designer_modal_foot d-flex justify-content-end gap-2 p-2">
+                    <button class="btn btn-secondary btn-sm" t-on-click="closeDomain">Cancel</button>
+                    <button class="btn btn-primary btn-sm" t-on-click="applyDomain">Apply</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- expanded preview: same data as the sidebar strip, up to 200 rows -->
+        <div t-if="state.previewDialog" class="ks_designer_modal">
+            <div class="ks_designer_modal_box ks_designer_preview_modal_box shadow-lg">
+                <div class="ks_designer_modal_head d-flex align-items-center">
+                    <span class="fw-bold">Preview</span>
+                    <span t-if="!state.previewDialog.loading and state.previewDialog.ok"
+                        class="badge text-bg-secondary ms-2"
+                        t-out="state.previewDialog.total + ' row' + (state.previewDialog.total === 1 ? '' : 's')"/>
+                    <div class="flex-grow-1"/>
+                    <button class="btn btn-sm btn-link p-0 me-2"
+                        t-att-disabled="state.previewDialog.loading"
+                        title="Refresh" t-on-click="refreshPreviewDialog">
+                        <i class="fa fa-refresh"/>
+                    </button>
+                    <button class="btn btn-sm btn-link p-0" t-on-click="closePreviewDialog">
+                        <i class="fa fa-times"/>
+                    </button>
+                </div>
+                <div class="p-0">
+                    <div t-if="state.previewDialog.loading" class="text-muted small p-3 text-center">
+                        <i class="fa fa-spinner fa-spin me-1"/>Loading…
+                    </div>
+                    <div t-elif="state.previewDialog.error" class="alert alert-danger m-2 p-2 small">
+                        <t t-out="state.previewDialog.error"/>
+                    </div>
+                    <div t-elif="state.previewDialog.ok" class="ks_designer_preview_modal_scroll">
+                        <table class="table table-sm table-striped table-hover mb-0">
+                            <thead>
+                                <tr>
+                                    <th t-foreach="state.previewDialog.columns" t-as="pc" t-key="pc.name"
+                                        t-out="pc.label"/>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr t-foreach="state.previewDialog.rows" t-as="prow" t-key="prow_index">
+                                    <td t-foreach="state.previewDialog.columns" t-as="pc" t-key="pc.name"
+                                        t-out="formatCell(prow[pc.name])"/>
+                                </tr>
+                                <tr t-if="!state.previewDialog.rows.length">
+                                    <td t-att-colspan="state.previewDialog.columns.length"
+                                        class="text-muted text-center py-3">No matching rows</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <div t-if="state.previewDialog.total > state.previewDialog.rows.length"
+                            class="text-muted small p-2 border-top">
+                            Showing <t t-out="state.previewDialog.rows.length"/> of
+                            <t t-out="state.previewDialog.total"/> rows.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</t>
+
+</templates>
