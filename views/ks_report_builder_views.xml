@@ -55,6 +55,7 @@
                         <group>
                             <field name="group_ids" widget="many2many_tags"/>
                             <field name="lang_id" options="{'no_create': True}"/>
+                            <field name="property_company_id" options="{'no_create': True}"/>
                             <field name="create_menu"/>
                             <field name="menu_parent_id" invisible="not create_menu"
                                 options="{'no_create': True}"/>
@@ -63,13 +64,10 @@
                     </group>
                     <notebook>
                         <page string="Columns" name="columns">
-                            <!-- The list stays deliberately narrow: Type,
-                                 a plain-language Definition and the Label.
-                                 Everything kind-specific lives in the form
-                                 dialog below, where it can be grouped and
-                                 shown only when it actually applies - the
-                                 previous editable list carried 11 columns at
-                                 once and pushed Label off-screen. -->
+                            <!-- Deliberately narrow: Type, Definition and
+                                 Label. Everything kind-specific lives in the
+                                 form dialog below, shown only when it
+                                 applies. -->
                             <field name="field_ids" mode="list">
                                 <list>
                                     <field name="sequence" widget="handle"/>

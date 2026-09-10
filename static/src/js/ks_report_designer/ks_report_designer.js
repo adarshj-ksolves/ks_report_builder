@@ -11,20 +11,17 @@ import { DomainSelector } from "@web/core/domain_selector/domain_selector";
 /**
  * Visual, ER-diagram style report designer.
  *
- * Deliberately an alternative AUTHORING UI only: it produces an ordinary
- * ks.report.builder record (see ks_report_designer.py), so path resolution,
- * list flattening, aggregates, deploy and every validation rule are the
- * already-tested ones. Nothing about the query engine is duplicated here.
+ * An alternative authoring UI only: it produces an ordinary ks.report.builder
+ * record (see ks_report_designer.py), so the query engine, validation and
+ * deploy pipeline are the already-tested ones.
  *
  * Interaction model:
- *  - the canvas holds model "nodes"; expanding a relation on a node spawns the
- *    related model as a new node, joined by a drawn connector. Because a node
- *    can only be created by following a real relation, every path the user can
- *    build is valid by construction - that is what replaces typing a path.
- *  - fields are dragged out of a node onto the Columns panel (copy), and
- *    columns are dragged within the panel to reorder (move). Both use native
- *    HTML5 drag and drop with a discriminating payload, rather than mixing two
- *    drag systems.
+ *  - the canvas holds model "nodes"; expanding a relation spawns the related
+ *    model as a new node joined by a connector. A node can only be created by
+ *    following a real relation, so every path is valid by construction.
+ *  - fields are dragged from a node onto the Columns panel (copy), and columns
+ *    are dragged within the panel to reorder (move) - both native HTML5 drag
+ *    and drop with a discriminating payload, not two drag systems.
  */
 
 let nodeSeq = 1;
@@ -56,6 +53,7 @@ export class KsReportDesigner extends Component {
             previewDialog: null,
             editingReportId: null,
             loadingReport: false,
+            zoom: 1,
         });
 
         // Transient drag bookkeeping. Not in state: it must not re-render.
@@ -66,10 +64,8 @@ export class KsReportDesigner extends Component {
             this.languages = await this.orm.searchRead(
                 "res.lang", [["active", "=", true]], ["id", "name", "code"]
             );
-            // "Edit in Designer" on the report form opens this action with
-            // report_id in its params (see KsReportBuilder.action_open_designer)
-            // - present, this replays the report's own columns onto a fresh
-            // canvas instead of starting empty.
+            // "Edit in Designer" opens this action with report_id in its
+            // params, which replays that report's columns onto the canvas.
             const reportId = this.props.action?.params?.report_id;
             if (reportId) {
                 await this.loadReportIntoDesigner(reportId);
@@ -77,18 +73,15 @@ export class KsReportDesigner extends Component {
         });
 
         // Debounced: every drag/reorder/collapse-change would otherwise fire
-        // its own round trip. 400ms is long enough to absorb a burst of
-        // column edits but still feels immediate once the user pauses.
+        // its own round trip.
         this.refreshPreview = useDebounced(this._refreshPreview, 400);
     }
 
     // ------------------------------------------------------- edit existing
 
-    /** Rebuilds the canvas from an existing report's own columns (server
-     *  reconstructs the node graph from their dotted paths - see
-     *  ks_load_report). Positions are assigned here with the SAME cascading
-     *  layout expandRelation() already uses by hand, so a replayed canvas
-     *  looks like one a person built, not a special "loaded" layout. */
+    /** Rebuild the canvas from an existing report's columns; the server
+     *  reconstructs the node graph from their dotted paths (ks_load_report).
+     *  Positions use the same cascading layout as expandRelation(). */
     async loadReportIntoDesigner(reportId) {
         this.state.loadingReport = true;
         try {
@@ -115,8 +108,8 @@ export class KsReportDesigner extends Component {
                 await this.addNode(n.model, n.model, parentClientId, n.rel_field, n.via_x2many, x, y);
                 clientIdByServerIndex[i] = this.state.nodes[this.state.nodes.length - 1].id;
             }
-            // Columns arrive from the server already shaped exactly like the
-            // ones addColumn()/addAggregateColumn() build client-side.
+            // Columns arrive shaped exactly like the ones addColumn() and
+            // addAggregateColumn() build client-side.
             this.state.columns = data.columns;
             this.refreshPreview();
         } finally {
@@ -126,13 +119,9 @@ export class KsReportDesigner extends Component {
 
     // ------------------------------------------------------------- preview
 
-    /** The one place ``state.columns`` is turned into what the server
-     *  expects, for preview, create AND update alike. Used to be three
-     *  separate copies of this mapping, two of which quietly disagreed
-     *  (preview omitted a list column's Filter and an aggregate's Filter,
-     *  so what you previewed and what Create Report actually built were not
-     *  always the same report) - one function makes that class of drift
-     *  impossible instead of something to remember to keep in sync. */
+    /** The one place ``state.columns`` becomes what the server expects, for
+     *  preview, create and update alike - so a preview can never describe a
+     *  different report from the one Create Report builds. */
     _columnsPayload() {
         return this.state.columns.map((c) => (
             c.kind === "aggregate"
@@ -156,15 +145,13 @@ export class KsReportDesigner extends Component {
     }
 
     /** Shared by the sidebar strip and the expanded dialog, so both preview
-     *  EXACTLY the same columns the same way - only the row limit differs. */
+     *  the same columns - only the row limit differs. */
     _previewPayload() {
         return { model: this.state.baseModel.model, columns: this._columnsPayload() };
     }
 
-    /** Real data, computed by the real query builder, with ZERO writes - see
-     *  ks_preview in ks_report_designer.py. Runs after every change that
-     *  could affect the result (columns, base model), so a mistake shows up
-     *  before the user commits to Create Report rather than after. */
+    /** Real data from the real query builder, with zero writes (see
+     *  ks_preview). Runs after every change that could affect the result. */
     async _refreshPreview() {
         if (!this.state.baseModel || !this.state.columns.length) {
             this.state.preview = null;
@@ -175,34 +162,27 @@ export class KsReportDesigner extends Component {
         const result = await this.orm.call(
             "ks.report.designer", "ks_preview", [this._previewPayload()]
         );
-        // A column may have been added/removed while this request was in
-        // flight; a stale response overwriting a newer one would flicker
-        // between two different previews for no reason the user did.
+        // A column may have changed while this request was in flight; a
+        // stale response must not overwrite a newer one.
         if (requestId !== this._previewRequestId) {
             return;
         }
         this.state.preview = { loading: false, ...result };
-        // Keep an already-open dialog in sync with the same edit that just
-        // updated the sidebar strip, rather than freezing on stale data.
+        // Keep an already-open dialog in sync with the sidebar strip.
         if (this.state.previewDialog) {
             this.refreshPreviewDialog();
         }
     }
 
-    /** Manual refresh: bypasses the 400ms debounce for an immediate response,
-     *  and cancels any debounced call already pending so it doesn't fire a
-     *  redundant second request right after this one resolves. Needed for
-     *  cases the automatic triggers don't cover (a transient RPC failure,
-     *  or the user just wants to double-check before Create Report) without
-     *  forcing them to touch a column to get a re-check. */
+    /** Manual refresh: bypasses the debounce and cancels any pending
+     *  debounced call, so it cannot fire a redundant second request. */
     forceRefreshPreview() {
         this.refreshPreview.cancel();
         this._refreshPreview();
     }
 
-    /** Opens the same preview in a bigger dialog with up to 200 rows instead
-     *  of the sidebar strip's 8 - the strip is deliberately small (it lives
-     *  next to the canvas), the dialog is for actually reading the data. */
+    /** The same preview in a bigger dialog, up to 200 rows instead of the
+     *  sidebar strip's 8. */
     async openPreviewDialog() {
         this.state.previewDialog = { loading: true };
         await this.refreshPreviewDialog();
@@ -227,6 +207,17 @@ export class KsReportDesigner extends Component {
         this.state.previewDialog = null;
     }
 
+    /** Clicking the dark backdrop closes the dialog, but not a click that
+     *  started inside the box and bubbled up.
+     *  A real method, never an inline `t-on-click="(ev) => { if (...) }"`:
+     *  OWL's template compiler takes single expressions, not control-flow
+     *  bodies, and fails to compile the WHOLE template if given one. */
+    onPreviewBackdropClick(ev) {
+        if (ev.target === ev.currentTarget) {
+            this.closePreviewDialog();
+        }
+    }
+
     // ---------------------------------------------------------------- model
 
     async searchModels() {
@@ -235,11 +226,16 @@ export class KsReportDesigner extends Component {
             this.state.modelResults = [];
             return;
         }
-        // Ranked + tokenised server side: a plain ilike ordered by name
-        // buried the model people actually wanted (see ks_search_models).
+        // Ranked and tokenised server side; see ks_search_models.
         this.state.modelResults = await this.orm.call(
             "ks.report.designer", "ks_search_models", [query, 15]
         );
+    }
+
+    /** Clear the base-model search box and its dropdown in one click. */
+    clearModelQuery() {
+        this.state.modelQuery = "";
+        this.state.modelResults = [];
     }
 
     async pickBaseModel(rec) {
@@ -263,8 +259,8 @@ export class KsReportDesigner extends Component {
             [model, this.state.showTechnical]
         );
         const parent = this.state.nodes.find((n) => n.id === parentId);
-        // The dotted prefix this node's fields hang off. Built from the chain
-        // of relations actually followed, which is why paths are always valid.
+        // The dotted prefix this node's fields hang off, built from the chain
+        // of relations actually followed.
         const prefix = parent
             ? `${parent.prefix}${relField}.`
             : "";
@@ -305,8 +301,8 @@ export class KsReportDesigner extends Component {
         );
     }
 
-    /** A model can have 90+ fields, far past what fits in a card, so each
-     *  node carries its own quick filter over both of its lists. */
+    /** A model can have 90+ fields, so each node carries its own quick
+     *  filter over both of its lists. */
     matching(node, entries) {
         const q = (node.filter || "").trim().toLowerCase();
         if (!q) {
@@ -315,15 +311,18 @@ export class KsReportDesigner extends Component {
         return entries.filter(
             (e) => e.string.toLowerCase().includes(q)
                 || e.name.toLowerCase().includes(q)
-                // relations are also searchable by what they point AT, so
-                // typing "product.product" finds the right Product relation
-                // among the several a model usually has
+                // relations are also searchable by what they point at
                 || (e.relation || "").toLowerCase().includes(q)
         );
     }
 
     setNodeFilter(node, ev) {
         node.filter = ev.target.value;
+    }
+
+    /** Clear one card's field filter. */
+    clearNodeFilter(node) {
+        node.filter = "";
     }
 
     /** Removing a node removes its descendants and any columns they produced. */
@@ -346,8 +345,8 @@ export class KsReportDesigner extends Component {
         this.state.nodes = this.state.nodes.filter((n) => !doomed.has(n.id));
         this.state.columns = this.state.columns.filter((c) => {
             if (c.kind === "aggregate") {
-                // an aggregate correlates on a card's path; if that card is
-                // gone the correlation no longer resolves
+                // an aggregate correlates on a card's path, which no longer
+                // resolves once that card is gone
                 return !prefixes.some((p) => `${c.agg_base_path}.` === p);
             }
             return !prefixes.some((p) => c.path.startsWith(p));
@@ -359,23 +358,44 @@ export class KsReportDesigner extends Component {
 
     // ------------------------------------------------------------ connectors
 
-    /** Straight connectors between each node and its parent, drawn under the
-     *  cards by an SVG layer - this is what makes the relations readable at a
-     *  glance the way an ER diagram does. */
+    /** Curved connectors between each node and its parent, drawn under the
+     *  cards by an SVG layer. An S-shaped cubic bezier reads as a flow even
+     *  when a node is dragged off to the side, where a straight line would
+     *  cut through other cards. */
     get connectors() {
         const byId = Object.fromEntries(this.state.nodes.map((n) => [n.id, n]));
         return this.state.nodes
             .filter((n) => n.parentId && byId[n.parentId])
             .map((n) => {
                 const p = byId[n.parentId];
+                const x1 = p.x + 292, y1 = p.y + 28;
+                const x2 = n.x, y2 = n.y + 28;
+                const pull = Math.max(40, Math.abs(x2 - x1) / 2);
                 return {
                     id: n.id,
-                    x1: p.x + 292, y1: p.y + 28,
-                    x2: n.x, y2: n.y + 28,
+                    path: `M ${x1} ${y1} C ${x1 + pull} ${y1}, ${x2 - pull} ${y2}, ${x2} ${y2}`,
+                    labelX: (x1 + x2) / 2,
+                    labelY: (y1 + y2) / 2 - 8,
                     label: n.relLabel,
                     dashed: n.viaX2many,
                 };
             });
+    }
+
+    // ----------------------------------------------------------------- zoom
+
+    /** 50%-150% in 10% steps, so a canvas with many expanded cards can be
+     *  seen as a whole. */
+    zoomIn() {
+        this.state.zoom = Math.min(1.5, Math.round((this.state.zoom + 0.1) * 10) / 10);
+    }
+
+    zoomOut() {
+        this.state.zoom = Math.max(0.5, Math.round((this.state.zoom - 0.1) * 10) / 10);
+    }
+
+    resetZoom() {
+        this.state.zoom = 1;
     }
 
     // ------------------------------------------------------- node dragging
@@ -385,19 +405,25 @@ export class KsReportDesigner extends Component {
             return;
         }
         ev.preventDefault();
+        // canvasRef is the ZOOMED content wrapper, so its bounding box is
+        // already post-transform. Dividing by the current zoom converts a
+        // screen-pixel delta back to the unscaled space node.x/y live in, so
+        // dragging tracks the cursor 1:1 at any zoom level.
         const rect = this.canvasRef.el.getBoundingClientRect();
+        const zoom = this.state.zoom;
         this.nodeDrag = {
             node,
-            dx: ev.clientX - rect.left - node.x,
-            dy: ev.clientY - rect.top - node.y,
+            dx: (ev.clientX - rect.left) / zoom - node.x,
+            dy: (ev.clientY - rect.top) / zoom - node.y,
         };
         const move = (e) => {
             if (!this.nodeDrag) {
                 return;
             }
             const r = this.canvasRef.el.getBoundingClientRect();
-            this.nodeDrag.node.x = Math.max(0, e.clientX - r.left - this.nodeDrag.dx);
-            this.nodeDrag.node.y = Math.max(0, e.clientY - r.top - this.nodeDrag.dy);
+            const z = this.state.zoom;
+            this.nodeDrag.node.x = Math.max(0, (e.clientX - r.left) / z - this.nodeDrag.dx);
+            this.nodeDrag.node.y = Math.max(0, (e.clientY - r.top) / z - this.nodeDrag.dy);
         };
         const up = () => {
             this.nodeDrag = null;
@@ -457,15 +483,10 @@ export class KsReportDesigner extends Component {
         this.refreshPreview();
     }
 
-    /** Ask the server what this path means before accepting it, so a bad drop
-     *  is refused immediately with the real message instead of failing later
-     *  at save or deploy time. */
+    /** Ask the server what this path means before accepting it, so a bad
+     *  drop is refused immediately rather than at save or deploy time. */
     async addColumn(payload, targetIndex = null) {
         const { path, field } = payload;
-        if (this.state.columns.some((c) => c.path === path && !c.collapse)) {
-            this.notification.add(_t("%s is already a column.", path), { type: "info" });
-            return;
-        }
         const info = await this.orm.call(
             "ks.report.designer", "ks_preview_path",
             [this.state.baseModel.model, path]
@@ -474,27 +495,76 @@ export class KsReportDesigner extends Component {
             this.notification.add(info.error, { type: "danger", title: _t("Cannot use this field") });
             return;
         }
+        // A path through a list must say how many rows become one value.
+        // Count is the only thing meaningful when the path ends ON the
+        // list; otherwise listing the values is the least surprising.
+        const collapse = info.crosses_list
+            ? (info.terminal_is_list ? "count" : "list")
+            : false;
+        // Runs after the collapse is known, and compares it: path alone is
+        // too strict (a First/Last pair off one path is legitimate), while
+        // exempting every list-crossing column is too loose and lets the same
+        // chained field be added without limit.
+        // A fresh column never carries a Filter, so an existing one that does
+        // is a different column and must not block this drop.
+        if (this.state.columns.some(
+            (c) => c.path === path && (c.collapse || false) === collapse && !c.flat_domain
+        )) {
+            this.notification.add(_t("%s is already a column.", path), { type: "info" });
+            return;
+        }
         const column = {
             path,
             label: field.string,
             ttype: field.ttype,
             crossesList: info.crosses_list,
             listModel: info.list_model,
-            // A path through a list must say how many rows become one value.
-            // Count is the only thing meaningful when the path ends ON the
-            // list; otherwise listing the values is the least surprising.
-            collapse: info.crosses_list
-                ? (info.terminal_is_list ? "count" : "list")
-                : false,
+            collapse,
         };
         const cols = [...this.state.columns];
         cols.splice(targetIndex === null ? cols.length : targetIndex, 0, column);
         this.state.columns = cols;
     }
 
+    /** Is this field already one of the report's columns? Drives the tick
+     *  box. Matches on path alone: the box answers "is this field included?",
+     *  so a First/Last pair off one path still shows as ticked once. */
+    isColumnPath(path) {
+        return this.state.columns.some((c) => c.path === path);
+    }
+
+    /** Tick/untick a field from its card - the keyboard- and click-friendly
+     *  twin of dragging it into the Columns panel. Routed through the same
+     *  addColumn() the drop handler uses, so a ticked column and a dragged
+     *  one cannot end up configured differently. */
+    async toggleColumn(node, field) {
+        const path = node.prefix + field.name;
+        if (this.isColumnPath(path)) {
+            // Untick removes every column on this path, including a
+            // First/Last pair, so the box cannot stay ticked with nothing
+            // left to untick.
+            this.state.columns = this.state.columns.filter((c) => c.path !== path);
+            this.refreshPreview();
+            return;
+        }
+        await this.addColumn({ path, field });
+        this.refreshPreview();
+    }
+
+    /** Space/Enter toggles a focused field row, so the Columns list can be
+     *  built without a mouse. A real method, never an inline arrow with an
+     *  `if` in it - that breaks OWL's template compiler outright. */
+    onFieldKeydown(node, field, ev) {
+        if (ev.key !== "Enter" && ev.key !== " ") {
+            return;
+        }
+        ev.preventDefault();   // stop Space scrolling the canvas
+        this.toggleColumn(node, field);
+    }
+
     setColumnLabel(col, ev) {
         col.label = ev.target.value;
-        // label doesn't change the data, only its heading - not worth a round trip
+        // the label changes only the heading, not the data
     }
 
     setColumnCollapse(col, ev) {
@@ -507,15 +577,11 @@ export class KsReportDesigner extends Component {
         this.refreshPreview();
     }
 
-    /** ks_preview runs raw SQL (cr.execute), not the ORM's own read(), so a
-     *  many2one column comes back as its bare integer id, not the [id, name]
-     *  tuple the rest of Odoo shows - the preview trades "looks exactly like
-     *  the deployed report" for "zero writes, real numbers, no ir.model
-     *  needed to test with". "No value" (NULL, e.g. an aggregate with no
-     *  matching rows) arrives as `false`, matching Odoo's own RPC convention
-     *  (see _ks_jsonify) - not `null`, which XML-RPC cannot even carry. Only
-     *  that "no value" family gets a placeholder; falsy numbers like 0 must
-     *  still render as 0. */
+    /** ks_preview runs raw SQL, not the ORM's read(), so the preview trades
+     *  "looks exactly like the deployed report" for zero writes and real
+     *  numbers. "No value" arrives as `false` (see _ks_jsonify), not `null`.
+     *  Only that family gets a placeholder - a falsy number like 0 must still
+     *  render as 0. */
     formatCell(value) {
         return value === null || value === undefined || value === "" || value === false
             ? "—" : value;
@@ -524,9 +590,8 @@ export class KsReportDesigner extends Component {
     // --------------------------------------------------------------- domains
 
     /** One editor serves all three filters - the report's own Filter, a list
-     *  column's flat_domain and an aggregate's agg_domain. They differ only
-     *  by which model the domain is written against and where the result is
-     *  stored, so `kind` dispatches on apply. */
+     *  column's flat_domain and an aggregate's agg_domain - which differ only
+     *  by target model and destination, so `kind` dispatches on apply. */
     openReportDomain() {
         if (!this.state.baseModel) {
             return;
@@ -595,13 +660,11 @@ export class KsReportDesigner extends Component {
 
     // ------------------------------------------------------------ aggregate
 
-    /** An aggregate correlates another table back to a dimension. That
-     *  dimension is either a card reached by many2one hops, or the BASE card
-     *  itself (empty agg_base_path = "correlate on this record") - the latter
-     *  is what makes one-row-per-X reports possible, e.g. base product.product
-     *  with sold / purchased / invoiced totals for that product. Only cards
-     *  reached through a list are excluded: their rows aren't a single value
-     *  to correlate on. */
+    /** An aggregate correlates another table back to a dimension: either a
+     *  card reached by many2one hops, or the base card itself (empty
+     *  agg_base_path), which is what makes one-row-per-X reports possible.
+     *  Cards reached through a list are excluded - their rows are not a
+     *  single value to correlate on. */
     canAggregate(node) {
         return !node.viaX2many;
     }
@@ -650,8 +713,7 @@ export class KsReportDesigner extends Component {
         agg.fields = await this.orm.call(
             "ks.report.designer", "ks_aggregate_fields", [rec.model, agg.dimension]
         );
-        // exactly one link is the common case - choosing it for the user
-        // removes a decision that has only one right answer
+        // one link is the common case, and has only one right answer
         agg.link = agg.fields.links.length ? agg.fields.links[0].id : null;
         agg.measure = agg.fields.measures.length ? agg.fields.measures[0].id : null;
         this.syncAggregateLabel();
@@ -688,6 +750,22 @@ export class KsReportDesigner extends Component {
         if (!this.aggregateReady) {
             return;
         }
+        // As in addColumn's guard: an aggregate is defined entirely by these
+        // six settings, so two with identical ones are the same column twice.
+        // The server's own duplicate check ignores the label too.
+        if (this.state.columns.some(
+            (c) => c.kind === "aggregate"
+                && c.agg_base_path === a.basePath
+                && c.agg_model_id === a.source.id
+                && c.agg_link_field_id === a.link
+                && c.agg_measure_field_id === a.measure
+                && c.agg_function === a.fn
+                && (c.agg_domain || false) === (a.domain || false)
+        )) {
+            this.notification.add(
+                _t("That aggregate is already a column."), { type: "info" });
+            return;
+        }
         this.state.columns = [...this.state.columns, {
             kind: "aggregate",
             label: a.label || a.source.name,
@@ -696,8 +774,8 @@ export class KsReportDesigner extends Component {
             agg_base_path: a.basePath,
             agg_model_id: a.source.id,
             agg_link_field_id: a.link,
-            // COUNT(*) still needs a measure field stored on the line to
-            // satisfy the model's own completeness constraint
+            // COUNT(*) still needs a measure field on the line to satisfy
+            // the model's completeness constraint
             agg_measure_field_id: a.measure,
             agg_function: a.fn,
             agg_domain: a.domain || false,
@@ -708,19 +786,19 @@ export class KsReportDesigner extends Component {
 
     // ------------------------------------------------------------- creation
 
-    /** Two or more "List as text" columns off the SAME list model don't line
-     *  up row-for-row: each is its own independent DISTINCT+sorted list, so
-     *  "Product: A, B" next to "Quantity: 5, 10, 15" cannot be read as
-     *  pairs even though a user's first instinct is to match them
-     *  positionally. Seen live on a real report built this way. Rather than
-     *  silently let that confusion through, flag it - the fix is either
-     *  First/Last (if only one value per record is wanted) or making that
-     *  list's model the report's OWN base model (one row per line instead
-     *  of one comma-joined cell). */
+    /** Two or more "List as text" columns off the SAME list model do not
+     *  line up row-for-row: each is its own independent sorted list, so
+     *  "Product: A, B" beside "Quantity: 5, 10, 15" cannot be read as pairs
+     *  even though the instinct is to match them positionally. Warned about
+     *  rather than silently allowed - the fix is First/Last, or making that
+     *  list the report's own base model. */
     get misalignedListModels() {
         const counts = {};
         for (const c of this.state.columns) {
-            if (c.collapse === "list" && c.listModel) {
+            // Both list modes are affected: the risk comes from two
+            // independent lists collapsed side by side, not from
+            // de-duplication.
+            if ((c.collapse === "list" || c.collapse === "list_all") && c.listModel) {
                 counts[c.listModel] = (counts[c.listModel] || 0) + 1;
             }
         }
@@ -729,6 +807,23 @@ export class KsReportDesigner extends Component {
 
     get canCreate() {
         return Boolean(this.state.baseModel) && this.state.columns.length > 0 && !this.state.busy;
+    }
+
+    /** Back to the report's own form, deliberately WITHOUT saving first - an
+     *  escape hatch, not a shortcut for Save Changes. Built client-side: the
+     *  id is already known in edit mode. */
+    async goToReportForm() {
+        if (!this.state.editingReportId) {
+            return;
+        }
+        await this.action.doAction({
+            type: "ir.actions.act_window",
+            res_model: "ks.report.builder",
+            res_id: this.state.editingReportId,
+            view_mode: "form",
+            views: [[false, "form"]],
+            target: "current",
+        });
     }
 
     async createReport() {
@@ -744,10 +839,9 @@ export class KsReportDesigner extends Component {
                 skip_company_check: true,
                 columns: this._columnsPayload(),
             };
-            // Editing an existing report calls ks_update_report (replaces its
-            // columns wholesale) instead of ks_create_report (makes a new
-            // record) - everything else about building the payload is
-            // identical, only the destination differs.
+            // Editing an existing report calls ks_update_report (replaces
+            // its columns wholesale) instead of ks_create_report; only the
+            // destination differs.
             const action = this.state.editingReportId
                 ? await this.orm.call(
                     "ks.report.designer", "ks_update_report",

@@ -1,9 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
-    <!-- The visual designer is a client action, deliberately separate from
-         the Report Definitions form: it is an alternative way to AUTHOR a
-         report, and what it produces is an ordinary ks.report.builder record
-         that then behaves exactly like a hand-built one. -->
+    <!-- A client action, separate from the Report Definitions form: an
+         alternative way to author a report, producing an ordinary
+         ks.report.builder record. -->
     <record id="action_ks_report_designer" model="ir.actions.client">
         <field name="name">Report Designer</field>
         <field name="tag">ks_report_designer</field>
@@ -11,7 +10,7 @@
 
     <menuitem id="menu_ks_report_designer"
         name="Report Designer"
-        parent="menu_ks_report_builder_config"
+        parent="menu_ks_report_builder_root"
         action="action_ks_report_designer"
         sequence="5"/>
 </odoo>

@@ -1,19 +1,47 @@
 .ks_designer {
-    background: #f8f9fa;
-    // The domain editor and the expanded preview are position:absolute;
-    // inset:0 overlays (see .ks_designer_modal below). Without a positioned
-    // ancestor here, "inset:0" resolves against whatever the nearest
-    // positioned ancestor further up happens to be - observed live: the
-    // overlay covered only part of the screen and left the Columns panel
-    // visible and clickable beside it, not a real modal at all. This makes
-    // .ks_designer itself that ancestor, so an overlay always spans the
-    // WHOLE designer (canvas + panel), regardless of what wraps it.
+    // ---- design tokens -------------------------------------------------
+    // Each role colour is defined once and reused by every card border,
+    // connector, badge and icon, so they cannot drift apart.
+    --ks-accent: #6a3aad;       // base-model card, primary badges
+    --ks-accent-soft: #f1ecf9;
+    --ks-link: #2563eb;         // many2one relations/cards
+    --ks-link-soft: #eaf1ff;
+    --ks-list: #d9822b;         // one2many/many2many relations/cards
+    --ks-list-soft: #fdf1e3;
+    --ks-danger: #dc3545;
+    --ks-border: #e2e5ea;
+    --ks-radius: .5rem;
+    --ks-shadow: 0 1px 2px rgba(16, 24, 40, .06), 0 1px 3px rgba(16, 24, 40, .08);
+    --ks-shadow-lg: 0 4px 10px rgba(16, 24, 40, .10), 0 8px 24px rgba(16, 24, 40, .10);
+
+    background: #f6f7f9;
+    // The overlays below are position:absolute; inset:0. Without a
+    // positioned ancestor here, inset:0 resolves against whatever positioned
+    // ancestor is further up, and the overlay then covers only part of the
+    // designer. This makes .ks_designer itself that ancestor.
     position: relative;
 
     .ks_designer_bar {
         background: #fff;
     }
     .ks_designer_name { max-width: 240px; }
+
+    .ks_designer_badge_accent {
+        background: var(--ks-accent-soft);
+        color: var(--ks-accent);
+        font-weight: 600;
+    }
+    .ks_designer_badge_editing {
+        background: var(--ks-link-soft);
+        color: var(--ks-link);
+        font-weight: 600;
+    }
+    .ks_designer_bar_divider {
+        width: 1px;
+        align-self: stretch;
+        background: var(--ks-border);
+        margin: 0 .1rem;
+    }
 
     .ks_designer_dropdown {
         position: absolute;
@@ -22,24 +50,61 @@
         left: 0;
         min-width: 320px;
         background: #fff;
-        border: 1px solid #dee2e6;
-        border-radius: .25rem;
+        border: 1px solid var(--ks-border);
+        border-radius: var(--ks-radius);
+        box-shadow: var(--ks-shadow-lg);
         max-height: 320px;
         overflow-y: auto;
     }
     .ks_designer_dropdown_item {
-        padding: .35rem .6rem;
+        padding: .4rem .7rem;
         cursor: pointer;
-        &:hover { background: #eef2ff; }
+        transition: background-color .1s ease;
+        &:hover { background: var(--ks-accent-soft); }
     }
 
     // ---- canvas -------------------------------------------------------
     .ks_designer_canvas {
         overflow: auto;
-        // room to drag nodes around without the canvas collapsing
-        min-height: 600px;
-        background-image: radial-gradient(#dee2e6 1px, transparent 1px);
-        background-size: 18px 18px;
+    }
+
+    // Everything that scales together (grid, connectors, cards) lives here,
+    // with a fixed logical footprint so there is always room to drag a card.
+    .ks_designer_zoom_content {
+        position: relative;
+        width: 2400px;
+        height: 1500px;
+        transform-origin: top left;
+        transition: transform .12s ease-out;
+        background-image: radial-gradient(var(--ks-border) 1px, transparent 1px);
+        background-size: 20px 20px;
+    }
+
+    .ks_designer_zoom_controls {
+        // `fixed`, not `absolute`: the scrollable .ks_designer_canvas is its
+        // own positioned ancestor, so `absolute` pinned this to the content
+        // box and it scrolled away with the canvas.
+        position: fixed;
+        z-index: 15;
+        left: 12px;
+        bottom: 20px;
+        display: flex;
+        align-items: center;
+        gap: .4rem;
+        background: #fff;
+        border-radius: 999px;
+        padding: .25rem .6rem;
+        border: 1px solid var(--ks-border);
+
+        .btn { width: 20px; }
+    }
+    .ks_designer_zoom_pct {
+        font-size: 12px;
+        color: #6c757d;
+        cursor: pointer;
+        min-width: 38px;
+        text-align: center;
+        user-select: none;
     }
 
     .ks_designer_empty {
@@ -49,6 +114,11 @@
         align-items: center;
         justify-content: center;
         pointer-events: none;
+        z-index: 1;
+    }
+    .ks_designer_empty_icon {
+        font-size: 2.5rem;
+        color: var(--ks-border);
     }
 
     .ks_designer_links {
@@ -57,7 +127,7 @@
         width: 100%;
         height: 100%;
         pointer-events: none;
-        line { stroke: #9aa5b1; stroke-width: 2; }
+        path { stroke: #9aa5b1; stroke-width: 1.75; }
         text { fill: #6c757d; font-size: 11px; }
     }
 
@@ -65,25 +135,38 @@
         position: absolute;
         width: 290px;
         background: #fff;
-        border: 1px solid #ced4da;
-        border-radius: .35rem;
+        border: 1px solid var(--ks-border);
+        border-radius: var(--ks-radius);
+        box-shadow: var(--ks-shadow);
         user-select: none;
         z-index: 2;
+        transition: box-shadow .12s ease;
+        // a colored top edge names the card's role at a glance
+        border-top: 3px solid var(--ks-link);
 
-        &.ks_designer_node_list { border-color: #f0ad4e; }
+        &:hover { box-shadow: var(--ks-shadow-lg); }
+
+        &.ks_designer_node_base { border-top-color: var(--ks-accent); }
+        &.ks_designer_node_list { border-top-color: var(--ks-list); }
+    }
+    .ks_designer_node_icon {
+        color: var(--ks-link);
+        .ks_designer_node_base &  { color: var(--ks-accent); }
+        .ks_designer_node_list & { color: var(--ks-list); }
     }
     .ks_designer_node_head {
-        padding: .35rem .5rem;
-        background: #f1f3f5;
-        border-bottom: 1px solid #dee2e6;
-        border-radius: .35rem .35rem 0 0;
+        padding: .45rem .6rem;
+        background: #fafafa;
+        border-bottom: 1px solid var(--ks-border);
+        border-radius: calc(var(--ks-radius) - 2px) calc(var(--ks-radius) - 2px) 0 0;
         cursor: move;
     }
     .ks_designer_filter {
-        margin: .35rem .5rem .1rem;
+        margin: .4rem .5rem .1rem;
         width: calc(100% - 1rem);
-        height: 26px;
+        height: 27px;
         font-size: 12px;
+        border-radius: .35rem;
     }
     .ks_designer_node_body {
         max-height: 300px;
@@ -93,23 +176,72 @@
     .ks_designer_section {
         font-size: 10px;
         text-transform: uppercase;
-        letter-spacing: .04em;
-        color: #868e96;
-        padding: .3rem .5rem .15rem;
+        letter-spacing: .05em;
+        color: #9095a1;
+        padding: .4rem .6rem .15rem;
     }
     .ks_designer_field {
-        padding: .15rem .5rem;
+        padding: .2rem .6rem;
         cursor: grab;
         font-size: 13px;
-        &:hover { background: #eef2ff; }
+        border-radius: .3rem;
+        margin: 0 .3rem;
+        transition: background-color .1s ease;
+        &:hover { background: var(--ks-accent-soft); }
         &:active { cursor: grabbing; }
+        // keyboard users get the same affordance as the mouse hover
+        &:focus-visible {
+            outline: 2px solid var(--ks-accent);
+            outline-offset: -2px;
+            background: var(--ks-accent-soft);
+        }
+        // already a column: tinted so the card shows what has been picked
+        &.ks_designer_field_on { background: var(--ks-accent-soft); }
+    }
+    // The box is a state indicator, not a separate control: the row handles
+    // the click. Letting the checkbox take it too would fire both its change
+    // and the row's click, cancelling out to a no-op.
+    .ks_designer_field_tick {
+        pointer-events: none;
+        flex: 0 0 auto;
+        margin-top: 0;
+        cursor: pointer;
+    }
+
+    // ---- clearable search inputs ---------------------------------------
+    .ks_designer_search {
+        position: relative;
+        // room for the cross so a long query doesn't run underneath it
+        input { padding-right: 1.6rem; }
+    }
+    .ks_designer_search_clear {
+        position: absolute;
+        top: 50%;
+        right: .3rem;
+        transform: translateY(-50%);
+        border: 0;
+        background: transparent;
+        color: #9095a1;
+        line-height: 1;
+        padding: .15rem .25rem;
+        border-radius: 50%;
+        cursor: pointer;
+        &:hover { color: var(--ks-danger); background: var(--ks-border); }
+    }
+    // the card filter sits inside the node body, which already indents it
+    .ks_designer_filter_wrap {
+        margin: .4rem .5rem .1rem;
+        .ks_designer_filter { margin: 0; width: 100%; }
     }
     .ks_designer_rel {
-        padding: .15rem .5rem;
+        padding: .2rem .6rem;
         cursor: pointer;
         font-size: 13px;
-        color: #0d6efd;
-        &:hover { background: #e7f1ff; }
+        color: var(--ks-link);
+        border-radius: .3rem;
+        margin: 0 .3rem;
+        transition: background-color .1s ease;
+        &:hover { background: var(--ks-link-soft); }
     }
 
     // ---- columns panel ------------------------------------------------
@@ -117,24 +249,28 @@
         width: 380px;
         flex: 0 0 380px;
         background: #fff;
-        // header + scrollable column list + preview (own scroll) stacked
+        // header + scrollable column list + preview, stacked
         display: flex;
         flex-direction: column;
         min-height: 0;
     }
     .ks_designer_drop_hint {
         margin: .75rem;
-        padding: 1.25rem .5rem;
+        padding: 1.5rem .5rem;
         text-align: center;
-        border: 2px dashed #ced4da;
-        border-radius: .35rem;
+        border: 2px dashed var(--ks-border);
+        border-radius: var(--ks-radius);
         font-size: 13px;
+        color: #9095a1;
     }
     .ks_designer_col {
-        padding: .4rem .5rem;
+        padding: .5rem .6rem;
         border-bottom: 1px solid #f1f3f5;
         cursor: grab;
-        &:hover { background: #f8f9fa; }
+        transition: background-color .1s ease;
+        border-left: 3px solid transparent;
+        &:hover { background: #fafbfc; }
+        &.ks_designer_col_aggregate { border-left-color: var(--ks-list); }
     }
     .ks_designer_col_path {
         font-size: 11px;
@@ -146,6 +282,10 @@
         font-style: italic;
     }
     .ks_designer_col_label { height: 26px; font-size: 13px; }
+    .ks_designer_col_kind_icon {
+        color: var(--ks-link);
+        .ks_designer_col_aggregate & { color: var(--ks-list); }
+    }
     .ks_designer_collapse { max-width: 140px; height: 26px; font-size: 12px; }
 }
 
@@ -157,22 +297,23 @@
     right: 12px;
     width: 330px;
     background: #fff;
-    border: 1px solid #ced4da;
-    border-radius: .35rem;
+    border: 1px solid var(--ks-border);
+    border-radius: var(--ks-radius);
+    box-shadow: var(--ks-shadow-lg);
 
     .ks_designer_aggpanel_head {
-        padding: .4rem .5rem;
-        background: #eef2ff;
-        border-bottom: 1px solid #dee2e6;
-        border-radius: .35rem .35rem 0 0;
+        padding: .5rem .6rem;
+        background: var(--ks-list-soft);
+        border-bottom: 1px solid var(--ks-border);
+        border-radius: calc(var(--ks-radius) - 1px) calc(var(--ks-radius) - 1px) 0 0;
     }
     .ks_designer_agglist {
         max-height: 190px;
         overflow-y: auto;
-        border: 1px solid #e9ecef;
-        border-radius: .25rem;
+        border: 1px solid var(--ks-border);
+        border-radius: .3rem;
     }
-    .ks_designer_agg_active { background: #e7f1ff; font-weight: 600; }
+    .ks_designer_agg_active { background: var(--ks-accent-soft); font-weight: 600; }
     .form-label { font-size: 11px; }
 }
 
@@ -181,17 +322,17 @@
     position: absolute;
     inset: 0;
     z-index: 40;
-    background: rgba(0, 0, 0, .35);
+    background: rgba(16, 24, 40, .45);
     display: flex;
     align-items: center;
     justify-content: center;
 
     .ks_designer_modal_box {
         background: #fff;
-        border-radius: .4rem;
-        // NB: not `min(760px, 92%)` - Sass evaluates min() itself and dies
-        // on mixed units ("Incompatible units"), which fails the whole
-        // backend style bundle, not just this file.
+        border-radius: var(--ks-radius);
+        box-shadow: var(--ks-shadow-lg);
+        // NB: not `min(760px, 92%)` - Sass evaluates min() itself and fails
+        // on mixed units, taking the whole backend style bundle with it.
         width: 92%;
         max-width: 760px;
         max-height: 80%;
@@ -236,20 +377,84 @@
 
 // ---- expanded preview dialog -------------------------------------------
 .ks_designer .ks_designer_preview_modal_box {
-    width: 92%;
-    max-width: 1100px;
+    width: 94%;
+    max-width: 1200px;
+    overflow: hidden; // so the rounded corners are not square-cut
 }
-.ks_designer .ks_designer_preview_modal_scroll {
-    max-height: 65vh;
-    overflow: auto;
 
-    table {
-        font-size: 13px;
-        th {
-            position: sticky;
-            top: 0;
-            background: #fff;
-            z-index: 1;
-        }
+.ks_designer .ks_designer_preview_modal_head {
+    padding: .65rem 1rem;
+    background: linear-gradient(135deg, var(--ks-accent-soft), var(--ks-link-soft));
+    border-bottom: 1px solid var(--ks-border);
+    color: var(--ks-accent);
+
+    .fa-table { color: var(--ks-accent); }
+}
+.ks_designer_preview_count {
+    background: #fff;
+    color: var(--ks-accent);
+    border: 1px solid var(--ks-border);
+    border-radius: 999px;
+    padding: .1rem .6rem;
+    font-size: 12px;
+    font-weight: 600;
+}
+.ks_designer_preview_iconbtn {
+    width: 28px;
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    color: var(--ks-accent);
+    background: transparent;
+    border: none;
+    transition: background-color .12s ease;
+    &:hover:not(:disabled) { background: rgba(255, 255, 255, .6); }
+    &:disabled { opacity: .5; }
+}
+
+.ks_designer .ks_designer_preview_modal_scroll {
+    max-height: 60vh;
+    overflow: auto;
+    background: #fff;
+}
+.ks_designer_preview_table {
+    font-size: 13px;
+    margin-bottom: 0;
+
+    thead th {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        background: #fbfbfc;
+        border-bottom: 2px solid var(--ks-border);
+        color: #4b5563;
+        font-weight: 600;
+        font-size: 11.5px;
+        text-transform: uppercase;
+        letter-spacing: .03em;
+        white-space: nowrap;
+        padding: .55rem .75rem;
     }
+    tbody td {
+        padding: .45rem .75rem;
+        white-space: nowrap;
+        border-top: 1px solid #f1f3f5;
+        vertical-align: middle;
+    }
+    tbody tr:nth-child(even) { background: #fafbfc; }
+    tbody tr:hover { background: var(--ks-accent-soft) !important; }
+}
+.ks_designer_preview_blank {
+    color: #b6bac1;
+    font-style: italic;
+}
+.ks_designer_preview_state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2.5rem 1rem;
+    color: #9095a1;
 }

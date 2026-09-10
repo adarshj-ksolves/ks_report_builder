@@ -19,20 +19,18 @@ def ks_is_snapshot_field(field_name):
 
 
 def ks_read_report_column_kind(cr, model_name, column_name):
-    """Fetch the ``kind`` (path/expression/aggregate) of one generated report
-    column, given a bare cursor. Raw SQL, same registry-setup-safety reason as
-    IrModel._ks_read_report_query: going through the ORM for
-    ks.report.builder.field is not safe this early, and a plain function
-    taking ``cr`` avoids needing a working ``ir.model`` recordset from within
-    IrModelFields._instanciate_attrs.
+    """Fetch ``(kind, agg_base_path)`` for one generated report column.
+
+    Raw SQL: the ORM for ks.report.builder.field is not usable this early in
+    registry setup.
     """
     cr.execute("""
         SELECT to_regclass('ks_report_builder_field') IS NOT NULL
     """)
     if not cr.fetchone()[0]:
-        return None
+        return None, None
     cr.execute("""
-        SELECT f.kind
+        SELECT f.kind, f.agg_base_path
           FROM ks_report_builder_field f
           JOIN ks_report_builder r ON r.id = f.report_id
          WHERE r.model_name = %s
@@ -40,7 +38,7 @@ def ks_read_report_column_kind(cr, model_name, column_name):
          LIMIT 1
     """, (model_name, column_name))
     row = cr.fetchone()
-    return row[0] if row else None
+    return (row[0], row[1]) if row else (None, None)
 
 
 class IrModel(models.Model):
@@ -50,8 +48,7 @@ class IrModel(models.Model):
     def _ks_read_report_query(self, model_name):
         """Fetch the compiled query for a generated report model.
 
-        Deliberately uses raw SQL: this runs during registry setup, including at
-        server boot, when going through the ORM for ks.report.builder is not safe.
+        Raw SQL: runs during registry setup, when the ORM is not usable.
         """
         cr = self.env.cr
         cr.execute("""
@@ -102,54 +99,34 @@ class IrModelFields(models.Model):
         if attrs is None:
             return attrs
         if ks_is_report_model(field_data.get('model')):
-            # Generated columns are never writable and numeric ones must show
-            # up as pivot measures. ir.model.fields has no `aggregator`
-            # column, so it is injected here rather than stored.
+            # ir.model.fields has no `aggregator` column, so it is injected
+            # here rather than stored.
             attrs['readonly'] = True
             if field_data.get('ttype') in KS_NUMERIC_TYPES:
-                # An 'aggregate' column is a scalar correlated lookup: the
-                # SAME value repeats on every base row that shares its
-                # correlation key (e.g. every sale order line for the same
-                # product shows that product's identical total-purchased
-                # figure - see kind='aggregate' in ks_report_builder.py).
-                # 'sum' is always wrong for these once the key repeats (it
-                # multiplies the true figure by however many rows share it -
-                # not a rounding quirk, a real N-times-counted total). 'avg'
-                # is the one built-in aggregator that is actually CORRECT
-                # here: averaging N identical copies of the same value
-                # returns that value unchanged - and grouping by the exact
-                # correlation dimension (e.g. Product, when the column is
-                # correlated on Product) is the normal way these columns get
-                # used in a pivot, since that dimension is what the lookup is
-                # keyed on in the first place. It is only misleading if the
-                # pivot/list is grouped by something OTHER than that
-                # dimension (or left fully ungrouped across many different
-                # keys) - there is no built-in aggregator that is correct in
-                # that case, so this is the least-wrong default that still
-                # keeps the column usable as a pivot Measure.
-                # 'path'/'expression' columns are true per-row measures and
-                # keep summing normally.
-                kind = None
+                # An aggregate column correlated on a SHARED dimension
+                # (agg_base_path set) repeats the same value on every base row
+                # with that key, so 'sum' multiplies it; 'avg' returns it
+                # unchanged when grouped by that dimension. A self-correlated
+                # one (empty agg_base_path) keys on base.id, so it is a
+                # genuine per-row measure and must sum, like path/expression
+                # columns.
+                kind = agg_base_path = None
                 try:
-                    kind = ks_read_report_column_kind(
+                    kind, agg_base_path = ks_read_report_column_kind(
                         self.env.cr, field_data.get('model'), field_data.get('name'))
                 except Exception:  # noqa: BLE001 - registry setup must never hard-fail
                     _logger.exception(
                         "KS Report Builder: cannot read column kind for %s.%s",
                         field_data.get('model'), field_data.get('name'))
-                if kind == 'aggregate':
+                if kind == 'aggregate' and agg_base_path:
                     attrs['aggregator'] = 'avg'
                 else:
                     attrs.setdefault('aggregator', 'sum')
         elif ks_is_snapshot_field(field_data.get('name')):
-            # A snapshot must capture the value from THIS record's own
-            # create() vals, not from a later recompute - and a field with an
-            # empty `depends` has no trigger edges, so Odoo's normal
-            # dependency-based recompute never fires it for new records (only
-            # explicit backfill does). `precompute` runs the compute against a
-            # virtual record built from the create() vals before the INSERT,
-            # which is the only reliable way to capture "value as of
-            # creation". ir.model.fields has no `precompute` column, so it is
-            # injected here rather than stored.
+            # An empty `depends` gives the field no trigger edges, so a
+            # normal recompute never fires on create. `precompute` runs the
+            # compute against a virtual record built from the create() vals
+            # before the INSERT, capturing the value as of creation.
+            # Injected here: ir.model.fields has no `precompute` column.
             attrs['precompute'] = True
         return attrs

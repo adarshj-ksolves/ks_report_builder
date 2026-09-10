@@ -8,20 +8,14 @@ KS_SCALAR_TYPES = (
     'char', 'text', 'selection', 'integer', 'float', 'monetary',
     'boolean', 'date', 'datetime', 'many2one',
 )
-# Only many2one may be traversed: crossing a one2many/many2many fans out rows
-# and every measure would silently double count. Restricting the picker's own
-# JS filter to KS_SCALAR_TYPES (ks_field_chain_field.js) is what actually
-# enforces this - a one2many/many2many never even appears as a selectable row,
-# so it can never be chosen as a mid-path hop either. This constant is kept
-# here too so server-side validation (_ks_walk_path) matches the client
-# exactly, in case a path is set via RPC rather than through the widget.
+# Only many2one may be traversed: crossing a list in a JOIN fans out rows and
+# every measure would double count. Mirrored by the picker's JS filter; kept
+# server-side too, for paths set via RPC rather than the widget.
 KS_TRAVERSABLE_TYPES = ('many2one',)
 
-# x2many relations are NOT added to KS_TRAVERSABLE_TYPES on purpose: that
-# constant governs the JOIN builder, and joining a list really would fan out
-# rows (Invariant #3, unchanged). They are instead crossed by collapsing the
-# whole list to ONE scalar inside a correlated subquery - the same mechanism
-# kind='aggregate' already uses - so the outer query still returns exactly one
+# x2many relations stay out of KS_TRAVERSABLE_TYPES on purpose: that constant
+# governs the JOIN builder. They are crossed instead by collapsing the list to
+# one scalar inside a correlated subquery, so the outer query still returns one
 # row per base record. See ks_split_path / _ks_build_flatten_subquery.
 KS_X2MANY_TYPES = ('one2many', 'many2many')
 
@@ -35,17 +29,33 @@ def ks_slugify(value):
     return re.sub(r'[^a-z0-9]+', '_', (value or '').lower()).strip('_')
 
 
-def ks_walk_path(env, model_name, path):
-    """Walk a dotted field path against ``model_name``, returning the final
-    Field. Shared by the mixin's own ``path`` (relative to ``base_model_id``)
-    and by KsReportBuilderField's aggregate-column correlation key (relative
-    to the same base model, but stored on a separate field) - anywhere a
-    dotted path needs the exact same many2one-only, scalar-terminal
-    validation.
+def KS_COMPANY_DEPENDENT_ERROR(field_name):
+    """Shared rejection message for company_dependent ("Per Company") fields.
 
-    Raises ValidationError on an unknown segment, on drilling through
-    anything other than a many2one, or if the final field's type isn't one
-    this module knows how to turn into a column.
+    These are stored as jsonb keyed by company id, so joining one as a plain
+    integer FK raises `operator does not exist: integer = jsonb`. Checked on
+    every path segment, not only the leaf. Reading one requires knowing WHICH
+    company, which a query compiled once at deploy time cannot resolve per
+    request - hence the explicit per-report property_company_id opt-in.
+    """
+    return _(
+        "%(f)s is a \"Per Company\" field - its stored value depends on "
+        "which company is looking, which a query saved once cannot express "
+        "on its own. If this report has a 'Report Company' set, %(f)s can "
+        "be used (its value for that one company); otherwise it is "
+        "rejected rather than silently pick a company for you.",
+        f=field_name)
+
+
+def ks_walk_path(env, model_name, path, allow_company_dependent=False):
+    """Walk a dotted field path against ``model_name``, returning the final
+    Field. many2one-only traversal, scalar terminal.
+
+    ``allow_company_dependent`` is ``bool(report.property_company_id)`` for
+    report columns; snapshot fields leave it False and always reject.
+
+    Raises ValidationError on an unknown segment, on drilling through anything
+    other than a many2one, or on an unsupported terminal type.
     """
     if not path:
         raise ValidationError(_("Pick the source field."))
@@ -59,6 +69,8 @@ def ks_walk_path(env, model_name, path):
         if field is None:
             raise ValidationError(_(
                 "Field %(f)s does not exist on %(m)s.", f=segment, m=model_name))
+        if getattr(field, 'company_dependent', False) and not allow_company_dependent:
+            raise ValidationError(KS_COMPANY_DEPENDENT_ERROR(segment))
         if index == len(segments) - 1:
             break
         if field.type not in KS_TRAVERSABLE_TYPES:
@@ -75,33 +87,47 @@ def ks_walk_path(env, model_name, path):
     return field
 
 
-def ks_split_path(env, model_name, path):
-    """Walk a dotted path that may cross AT MOST ONE x2many hop.
+def ks_split_path(env, model_name, path, allow_company_dependent=False):
+    """Walk a dotted path that may cross ANY NUMBER of x2many hops.
 
-    ``ks_walk_path`` above stays strictly many2one-only (it backs snapshot
-    fields and the aggregate correlation key, where a list makes no sense).
-    This is its superset, used for report columns: it additionally allows one
-    one2many/many2many hop, which the SQL builder then collapses to a single
-    value with a correlated subquery rather than a join.
+    Superset of ``ks_walk_path`` (which stays many2one-only for snapshot
+    fields and the aggregate correlation key), used for report columns.
+
+    Multiple lists in one path (e.g. ``milestone_ids.task_ids.name``) are
+    supported: each successive list becomes another JOIN inside the one
+    correlated subquery, and the collapse aggregates over the fully expanded
+    chain at the end, so the fan-out never escapes the parentheses.
 
     Returns a dict:
       ``prefix``       many2one path from the base model to the model that
-                       OWNS the list ('' when the list is on the base model)
+                       OWNS the FIRST list ('' when it is on the base model)
       ``owner_model``  technical name of that owning model
-      ``x2many``       the x2many ``Field``, or None for a plain m2o path
-      ``suffix``       path INSIDE the child model, from the list down to the
-                       final scalar ('' when the list itself is the last
-                       segment - only a Count collapse is meaningful then)
-      ``field``        the terminal scalar ``Field``, or None when the list
-                       itself is the last segment
+      ``x2many``       the FIRST x2many ``Field``, or None for a plain m2o
+                       path (kept for callers that only care whether the path
+                       crosses a list at all)
+      ``hops``         one entry per list crossed, in order, each
+                       ``{'field': <x2many Field>, 'owner_model': <model that
+                       defines it>, 'sub_path': <many2one path to walk after
+                       landing on its comodel - leading to the next list's
+                       owner, or, for the last hop, down to the final
+                       scalar>}``. Empty for a plain many2one path.
+      ``child_model``  comodel of the LAST list - the model the leaf value and
+                       the user's List Filter are read against - or None
+      ``suffix``       ``sub_path`` of the LAST hop ('' when the list itself
+                       is the final segment - only a Count collapse is
+                       meaningful then)
+      ``field``        the terminal scalar ``Field``, or None when a list is
+                       the final segment
     """
     if not path:
         raise ValidationError(_("Pick the source field."))
     segments = path.split('.')
-    x2many = None
-    x2many_index = None
-    owner_model = model_name
+    hops = []
+    prefix = ''
+    first_owner_model = model_name
     current = model_name
+    # many2one segments seen since the last list (or since the base model)
+    pending = []
     final_field = None
 
     for index, segment in enumerate(segments):
@@ -112,28 +138,42 @@ def ks_split_path(env, model_name, path):
         if field is None:
             raise ValidationError(_(
                 "Field %(f)s does not exist on %(m)s.", f=segment, m=current))
+        if getattr(field, 'company_dependent', False) and not allow_company_dependent:
+            raise ValidationError(KS_COMPANY_DEPENDENT_ERROR(segment))
         is_last = index == len(segments) - 1
 
         if field.type in KS_X2MANY_TYPES:
-            if x2many is not None:
-                raise ValidationError(_(
-                    "%(p)s goes through more than one list. Only one "
-                    "one2many/many2many can be flattened per column - after "
-                    "the first list, only single relations can be followed.",
-                    p=path))
-            x2many, x2many_index, owner_model = field, index, current
+            # Close off whatever many2one hops preceded this list: before the
+            # FIRST list they are the outer-query prefix, afterwards they
+            # belong to the previous hop as the way to reach THIS list's owner.
+            if hops:
+                hops[-1]['sub_path'] = '.'.join(pending)
+            else:
+                prefix = '.'.join(pending)
+                first_owner_model = current
+            hops.append({
+                'field': field,
+                'owner_model': current,
+                'sub_path': '',
+            })
+            pending = []
             current = field.comodel_name
             continue
 
         if is_last:
             final_field = field
+            pending.append(segment)
             break
 
         if field.type not in KS_TRAVERSABLE_TYPES:
             raise ValidationError(_(
                 "%(f)s is a %(t)s and cannot be drilled into.",
                 f=segment, t=field.type))
+        pending.append(segment)
         current = field.comodel_name
+
+    if hops:
+        hops[-1]['sub_path'] = '.'.join(pending)
 
     if final_field is not None:
         if final_field.type not in KS_SCALAR_TYPES:
@@ -142,10 +182,12 @@ def ks_split_path(env, model_name, path):
                 f=segments[-1], t=final_field.type))
 
     return {
-        'prefix': '.'.join(segments[:x2many_index]) if x2many_index is not None else '',
-        'owner_model': owner_model,
-        'x2many': x2many,
-        'suffix': '.'.join(segments[x2many_index + 1:]) if x2many_index is not None else '',
+        'prefix': prefix,
+        'owner_model': first_owner_model,
+        'x2many': hops[0]['field'] if hops else None,
+        'hops': hops,
+        'child_model': hops[-1]['field'].comodel_name if hops else None,
+        'suffix': hops[-1]['sub_path'] if hops else '',
         'field': final_field,
     }
 
@@ -154,19 +196,14 @@ def ks_x2many_sql_info(env, field, owner_model_name):
     """Validate that ``field`` (a one2many/many2many) is backed by real tables
     and return everything needed to correlate a subquery back to its owner.
 
-    Verified against the Odoo 19 source (odoo/orm/fields_relational.py):
-    - a One2many's ``inverse_name`` is NOT guaranteed to be a stored many2one:
-      it may be absent entirely, non-stored/computed (`:1171-1187` falls back
-      to Python), or a ``many2one_reference`` generic FK (`:952`).
-    - a Many2many's ``relation``/``column1``/``column2`` are filled lazily in
-      ``setup_nonrelated`` and are explicitly set to None when the field is
-      not stored (`:1292`), so all three must be checked.
-    - ``get_comodel_domain()`` (`:99-110`) returns the field's own ``domain=``
-      AND, for One2many, ``_additional_domain`` (`:906-912`) which adds the
-      ``res_model``-style discriminator for a generic FK. Applying it is NOT
-      optional: without it, a one2many over a model keyed by res_model/res_id
-      (mail.message, ir.attachment) silently matches OTHER models' rows that
-      happen to share the same numeric id.
+    A One2many's ``inverse_name`` may be absent, non-stored/computed, or a
+    ``many2one_reference`` generic FK; a Many2many's ``relation``/``column1``/
+    ``column2`` are None when the field is not stored - so all are checked.
+
+    Applying ``get_comodel_domain()`` is not optional: for a One2many it adds
+    the res_model-style discriminator, without which a list over a generically
+    keyed model (mail.message, ir.attachment) matches other models' rows that
+    share the same numeric id.
     """
     if not field.store:
         raise ValidationError(_(
@@ -213,11 +250,8 @@ def ks_x2many_sql_info(env, field, owner_model_name):
 
 
 class KsFieldPathMixin(models.AbstractModel):
-    """A dotted field path, typed directly by an arbitrary-depth field-chain
-    picker widget (``ks_field_chain_picker``, wrapping Odoo's own
-    ``ModelFieldSelector``) rather than a fixed number of chained dropdowns.
-
-    Concrete models supply ``base_model_id``.
+    """A dotted field path of arbitrary depth, set by the
+    ``ks_field_chain_picker`` widget. Concrete models supply ``base_model_id``.
     """
     _name = 'ks.field.path.mixin'
     _description = 'Field Path Picker'

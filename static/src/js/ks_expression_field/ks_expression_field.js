@@ -24,11 +24,9 @@ export class KsExpressionField extends CharField {
     static components = { ...CharField.components, Dropdown, DropdownItem };
 
     /**
-     * Read sibling rows straight from the in-memory Columns list on the
-     * parent report record (not a fresh RPC), so a column added earlier in
-     * the same, still-unsaved editing session is offered immediately - this
-     * matches what the Python compiler will see at Deploy time, since that
-     * also reads from field_ids as currently written.
+     * Read sibling rows from the in-memory Columns list rather than a fresh
+     * RPC, so a column added earlier in the same unsaved session is offered
+     * immediately - matching what the Python compiler sees at Deploy time.
      */
     get availableColumns() {
         const fieldIds = this.props.record.model.root.data.field_ids;
